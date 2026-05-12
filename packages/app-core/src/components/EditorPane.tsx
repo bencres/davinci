@@ -96,7 +96,10 @@ import { recordRendererPerf } from '../lib/perf'
 import { parseOutline } from '../lib/outline'
 import {
   findRenderedHeadingForOutlineLine,
-  previewScrollTopForHeading
+  nextOutlinePreviewSyncLockUntil,
+  outlineHeadingTextOffset,
+  previewScrollTopForHeading,
+  scrollTopForElementRelativeTop
 } from '../lib/preview-outline-jump'
 import {
   ArchiveIcon,
@@ -258,6 +261,8 @@ const paperHighlight = HighlightStyle.define([
  *  switch) so the update listener skips the save schedule. */
 const programmatic = Annotation.define<boolean>()
 const OUTLINE_JUMP_TOP_MARGIN = 24
+const OUTLINE_JUMP_SCROLL_SYNC_LOCK_MS = 450
+const OUTLINE_JUMP_SCROLL_SYNC_SETTLE_MS = 120
 const TASK_JUMP_HIGHLIGHT_MS = 1400
 const EMPTY_COMMENTS: NoteComment[] = []
 const taskJumpHighlightEffect = StateEffect.define<number | null>()
@@ -589,6 +594,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
   const pendingOutlineJumpLineRef = useRef<number | null>(null)
   const pendingPreviewOutlineJumpLineRef = useRef<number | null>(null)
   const outlinePreviewJumpFrameRef = useRef<number | null>(null)
+  const outlinePreviewSyncLockUntilRef = useRef(0)
   const activeOutlineLineRef = useRef<number | null>(null)
   const activeOutlineFrameRef = useRef<number | null>(null)
   const selectionActionFrameRef = useRef<number | null>(null)
@@ -734,6 +740,15 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
     return () => window.removeEventListener(ZEN_SET_PANE_MODE_EVENT, handler)
   }, [applyPaneMode, isActive])
 
+  const lockOutlinePreviewSync = useCallback((durationMs = OUTLINE_JUMP_SCROLL_SYNC_LOCK_MS): void => {
+    // Outline jumps target a rendered heading; ratio sync can otherwise override them.
+    outlinePreviewSyncLockUntilRef.current = nextOutlinePreviewSyncLockUntil(
+      performance.now(),
+      durationMs,
+      outlinePreviewSyncLockUntilRef.current
+    )
+  }, [])
+
   const scrollPreviewToOutlineLine = useCallback((line: number): boolean => {
     if (mode !== 'split' || !content) return false
     const previewEl = previewScrollRef.current
@@ -742,15 +757,17 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
     const heading = findRenderedHeadingForOutlineLine(previewEl, items, line)
     if (!heading) return false
     const nextTop = previewScrollTopForHeading(previewEl, heading, OUTLINE_JUMP_TOP_MARGIN)
+    lockOutlinePreviewSync(OUTLINE_JUMP_SCROLL_SYNC_SETTLE_MS)
     if (Math.abs(previewEl.scrollTop - nextTop) >= 1) {
       ignorePreviewScrollRef.current = true
       previewEl.scrollTo({ top: nextTop, behavior: 'auto' })
     }
     return true
-  }, [content?.body, mode])
+  }, [content?.body, lockOutlinePreviewSync, mode])
 
   const schedulePreviewOutlineJump = useCallback((line: number): void => {
     if (mode !== 'split') return
+    lockOutlinePreviewSync()
     pendingPreviewOutlineJumpLineRef.current = line
     if (outlinePreviewJumpFrameRef.current != null) {
       cancelAnimationFrame(outlinePreviewJumpFrameRef.current)
@@ -761,7 +778,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
         pendingPreviewOutlineJumpLineRef.current = null
       }
     })
-  }, [mode, scrollPreviewToOutlineLine])
+  }, [lockOutlinePreviewSync, mode, scrollPreviewToOutlineLine])
 
   const handlePreviewRendered = useCallback((): void => {
     const pendingLine = pendingPreviewOutlineJumpLineRef.current
@@ -773,6 +790,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
 
   useEffect(() => {
     pendingPreviewOutlineJumpLineRef.current = null
+    outlinePreviewSyncLockUntilRef.current = 0
   }, [content?.path])
 
   useEffect(() => {
@@ -787,15 +805,16 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
     const view = viewRef.current
     if (!view) return false
     const safeLine = Math.min(Math.max(1, line), view.state.doc.lines)
-    const pos = view.state.doc.line(safeLine).from
+    const targetLine = view.state.doc.line(safeLine)
+    const pos = targetLine.from + outlineHeadingTextOffset(targetLine.text)
+    schedulePreviewOutlineJump(safeLine)
     view.dispatch({
       selection: { anchor: pos },
-      effects: EditorView.scrollIntoView(pos, {
+      effects: EditorView.scrollIntoView(targetLine.from, {
         y: 'start',
         yMargin: OUTLINE_JUMP_TOP_MARGIN
       })
     })
-    schedulePreviewOutlineJump(safeLine)
     setFocusedPanel('editor')
     view.focus()
     return true
@@ -1455,12 +1474,53 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
       else ignorePreviewScrollRef.current = true
       target.scrollTop = nextTop
     }
+    const setSyncedScrollTop = (
+      target: HTMLElement,
+      nextTop: number,
+      targetKind: 'editor' | 'preview'
+    ): void => {
+      if (Math.abs(target.scrollTop - nextTop) < 1) return
+      if (targetKind === 'editor') ignoreEditorScrollRef.current = true
+      else ignorePreviewScrollRef.current = true
+      target.scrollTop = nextTop
+    }
+    const syncPreviewByVisibleHeading = (): boolean => {
+      const view = viewRef.current
+      if (!view) return false
+      const items = parseOutline(view.state.doc.toString())
+      if (items.length === 0) return false
+
+      const editorRect = editorEl.getBoundingClientRect()
+      const viewportTop = editorRect.top
+      const viewportBottom = editorRect.bottom
+      for (const item of items) {
+        if (item.line > view.state.doc.lines) break
+        const line = view.state.doc.line(item.line)
+        const pos = Math.min(line.to, line.from + outlineHeadingTextOffset(line.text))
+        const coords = view.coordsAtPos(pos)
+        if (!coords) continue
+        if (coords.bottom < viewportTop || coords.top > viewportBottom) continue
+
+        const heading = findRenderedHeadingForOutlineLine(previewEl, items, item.line)
+        if (!heading) return false
+        const nextTop = scrollTopForElementRelativeTop(
+          previewEl,
+          heading,
+          coords.top - editorRect.top
+        )
+        setSyncedScrollTop(previewEl, nextTop, 'preview')
+        return true
+      }
+
+      return false
+    }
     const onEditorScroll = (): void => {
       if (ignoreEditorScrollRef.current) {
         ignoreEditorScrollRef.current = false
         return
       }
-      syncByRatio(editorEl, previewEl, 'preview')
+      if (performance.now() < outlinePreviewSyncLockUntilRef.current) return
+      if (!syncPreviewByVisibleHeading()) syncByRatio(editorEl, previewEl, 'preview')
     }
     const onPreviewScroll = (): void => {
       if (ignorePreviewScrollRef.current) {
@@ -1471,13 +1531,16 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
     }
     editorEl.addEventListener('scroll', onEditorScroll, { passive: true })
     previewEl.addEventListener('scroll', onPreviewScroll, { passive: true })
-    const raf = requestAnimationFrame(() => syncByRatio(editorEl, previewEl, 'preview'))
+    const raf = requestAnimationFrame(() => {
+      if (!syncPreviewByVisibleHeading()) syncByRatio(editorEl, previewEl, 'preview')
+    })
     return () => {
       cancelAnimationFrame(raf)
       editorEl.removeEventListener('scroll', onEditorScroll)
       previewEl.removeEventListener('scroll', onPreviewScroll)
       ignoreEditorScrollRef.current = false
       ignorePreviewScrollRef.current = false
+      outlinePreviewSyncLockUntilRef.current = 0
     }
   }, [content?.path, mode])
 

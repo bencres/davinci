@@ -52,4 +52,23 @@ describe('livePreviewPlugin', () => {
 
     view.destroy()
   })
+
+  it('keeps heading markers hidden when editing the heading text', () => {
+    const doc = '# Code blocks\n\nBody'
+    const view = mountEditor(doc, doc.indexOf('Code'))
+
+    expect(view.dom.textContent).toContain('Code blocks')
+    expect(view.dom.textContent).not.toContain('# Code blocks')
+
+    view.destroy()
+  })
+
+  it('reveals heading markers when the selection is on the marker', () => {
+    const doc = '# Code blocks\n\nBody'
+    const view = mountEditor(doc, 0)
+
+    expect(view.dom.textContent).toContain('# Code blocks')
+
+    view.destroy()
+  })
 })

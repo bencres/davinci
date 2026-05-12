@@ -676,7 +676,11 @@ function computeDecorations(view: EditorView): DecorationSet {
         if (isLinkSyntax) {
           const linkRange = enclosingLinkRange(node)
           if (linkRange && selectionTouchesRange(state, linkRange.from, linkRange.to)) return
-        } else if (activeLines.has(line)) return
+        } else if (activeLines.has(line)) {
+          const keepHeadingMarkerHidden =
+            name === 'HeaderMark' && !selectionTouchesRange(state, node.from, node.to)
+          if (!keepHeadingMarkerHidden) return
+        }
 
         let start = node.from
         let end = node.to

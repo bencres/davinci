@@ -1,6 +1,11 @@
 import type { OutlineItem } from './outline'
 
 const RENDERED_HEADING_SELECTOR = 'h1, h2, h3, h4, h5, h6'
+const ATX_HEADING_TEXT_OFFSET_RE = /^(#{1,6})[ \t]+/
+
+export function outlineHeadingTextOffset(lineText: string): number {
+  return lineText.match(ATX_HEADING_TEXT_OFFSET_RE)?.[0].length ?? 0
+}
 
 export function findOutlineHeadingIndex(
   items: readonly OutlineItem[],
@@ -25,9 +30,25 @@ export function previewScrollTopForHeading(
   heading: HTMLElement,
   topMargin: number
 ): number {
-  const containerRect = previewScrollEl.getBoundingClientRect()
-  const headingRect = heading.getBoundingClientRect()
-  const maxTop = Math.max(0, previewScrollEl.scrollHeight - previewScrollEl.clientHeight)
-  const nextTop = previewScrollEl.scrollTop + headingRect.top - containerRect.top - topMargin
+  return scrollTopForElementRelativeTop(previewScrollEl, heading, topMargin)
+}
+
+export function scrollTopForElementRelativeTop(
+  scrollEl: HTMLElement,
+  element: HTMLElement,
+  relativeTop: number
+): number {
+  const containerRect = scrollEl.getBoundingClientRect()
+  const elementRect = element.getBoundingClientRect()
+  const maxTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight)
+  const nextTop = scrollEl.scrollTop + elementRect.top - containerRect.top - relativeTop
   return Math.max(0, Math.min(maxTop, nextTop))
+}
+
+export function nextOutlinePreviewSyncLockUntil(
+  nowMs: number,
+  durationMs: number,
+  currentUntilMs: number
+): number {
+  return Math.max(currentUntilMs, nowMs + durationMs)
 }

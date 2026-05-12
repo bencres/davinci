@@ -1142,16 +1142,8 @@ textarea,
 
 .cm-editor {
   background: transparent !important;
-  --z-heading-line-height: clamp(
-    1.15,
-    calc(var(--z-editor-line-height, 1.7) - 0.25),
-    1.45
-  );
-  --z-heading-bottom-gap: clamp(
-    0.34em,
-    calc(var(--z-editor-line-height, 1.7) * 0.24em),
-    0.5em
-  );
+  --z-heading-line-height: var(--z-editor-line-height, 1.7);
+  --z-heading-bottom-gap: 0px;
   /* Text font (editor + preview body). Falls back to SF Mono so
      writing feels code-ish out of the box. */
   font-family: var(
@@ -1479,7 +1471,7 @@ textarea,
 .cm-editor .tok-heading5 {
   font-size: 1em;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
 }
 .cm-editor .tok-heading6 {
   font-size: 0.92em;
@@ -1687,26 +1679,12 @@ textarea,
 /* --- Rendered markdown (preview) --------------------------------------- */
 
 .prose-zen {
-  --z-heading-line-height: clamp(
-    1.15,
-    calc(var(--z-editor-line-height, 1.7) - 0.25),
-    1.45
-  );
-  --z-prose-block-gap: clamp(
-    0.55em,
-    calc(var(--z-editor-line-height, 1.7) * 0.4em),
-    0.82em
-  );
-  --z-prose-section-gap: clamp(
-    0.9em,
-    calc(var(--z-editor-line-height, 1.7) * 0.72em),
-    1.25em
-  );
-  --z-prose-heading-gap: clamp(
-    0.28em,
-    calc(var(--z-editor-line-height, 1.7) * 0.2em),
-    0.44em
-  );
+  --z-heading-line-height: var(--z-editor-line-height, 1.7);
+  --z-prose-line-gap: calc(var(--z-editor-line-height, 1.7) * 1em);
+  --z-prose-rendered-gap: calc(var(--z-prose-line-gap) * 0.6);
+  --z-prose-block-gap: var(--z-prose-rendered-gap);
+  --z-prose-section-gap: var(--z-prose-rendered-gap);
+  --z-prose-heading-gap: var(--z-prose-rendered-gap);
   width: min(100%, var(--z-preview-max-width, 920px));
   max-width: none;
   margin: 0 auto;
@@ -1736,13 +1714,13 @@ textarea,
   font-family: inherit;
   font-weight: 700;
   color: theme("colors.ink.900");
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   line-height: var(--z-heading-line-height);
 }
 .prose-zen h1 {
   font-size: 2em;
   margin-top: 0;
-  margin-bottom: calc(var(--z-prose-heading-gap) * 1.35);
+  margin-bottom: var(--z-prose-heading-gap);
 }
 .prose-zen h2 {
   font-size: 1.6em;
@@ -1751,26 +1729,29 @@ textarea,
 }
 .prose-zen h3 {
   font-size: 1.3em;
-  margin-top: calc(var(--z-prose-section-gap) * 0.92);
+  margin-top: var(--z-prose-section-gap);
   margin-bottom: var(--z-prose-heading-gap);
 }
 .prose-zen h4 {
   font-size: 1.15em;
-  margin-top: calc(var(--z-prose-section-gap) * 0.85);
+  margin-top: var(--z-prose-section-gap);
   margin-bottom: var(--z-prose-heading-gap);
 }
 .prose-zen h5 {
   font-size: 1em;
-  margin-top: calc(var(--z-prose-section-gap) * 0.82);
+  margin-top: var(--z-prose-section-gap);
   margin-bottom: var(--z-prose-heading-gap);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
 }
 .prose-zen h6 {
   font-size: 0.92em;
-  margin-top: calc(var(--z-prose-section-gap) * 0.82);
+  margin-top: var(--z-prose-section-gap);
   margin-bottom: var(--z-prose-heading-gap);
   color: theme("colors.ink.700");
+}
+.prose-zen > :first-child {
+  margin-top: 0;
 }
 .prose-zen p {
   margin: var(--z-prose-block-gap) 0;
@@ -1854,18 +1835,20 @@ textarea,
   background: theme("colors.paper.200");
   border: 1px solid theme("colors.paper.300");
   border-radius: 10px;
-  padding: 14px 16px;
+  padding: var(--z-prose-line-gap) 16px;
   overflow-x: auto;
   margin: var(--z-prose-block-gap) 0;
 }
 .prose-zen pre code {
   background: transparent;
   padding: 0;
-  font-size: 0.88em;
+  font-size: 1em;
+  line-height: var(--z-editor-line-height, 1.7);
   color: theme("colors.ink.800");
 }
 .prose-zen .zen-code-block {
   position: relative;
+  --z-code-toolbar-line: max(var(--z-prose-line-gap), 28px);
   margin: var(--z-prose-block-gap) 0;
   background: theme("colors.paper.200");
   border: 1px solid theme("colors.paper.300");
@@ -1877,14 +1860,14 @@ textarea,
   border: 0;
   border-radius: 0;
   margin: 0;
-  padding: 42px 16px 14px;
+  padding: var(--z-code-toolbar-line) 16px var(--z-prose-line-gap);
 }
 .prose-zen .zen-code-block[data-code-folded="true"] pre {
   display: none;
 }
 .prose-zen .zen-code-block-toolbar {
   position: absolute;
-  top: 8px;
+  top: max(2px, calc((var(--z-code-toolbar-line) - 24px) / 2));
   right: 8px;
   left: 8px;
   z-index: 1;
@@ -2114,7 +2097,7 @@ textarea,
   font-size: 0.82rem;
   font-weight: 700;
   line-height: 1;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
