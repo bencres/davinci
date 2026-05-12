@@ -78,4 +78,31 @@ describe('editor and preview typography rhythm', () => {
       /\.cm-editor \.cm-search input\[type="checkbox"\]:checked\s*\{[^}]*background:\s*rgb\(var\(--z-accent\)\);/s
     )
   })
+
+  it('keeps expanded diagram SVGs visible inside the pan and zoom viewport', () => {
+    expect(stylesSource).toMatch(
+      /\.zen-diagram-pan-content\s*\{[^}]*width:\s*100%;/s
+    )
+    expect(stylesSource).toMatch(
+      /\.zen-diagram-pan-content \.zen-diagram-modal-host\s*\{[^}]*width:\s*100%;/s
+    )
+    expect(stylesSource).toMatch(
+      /\.zen-diagram-pan-content \.zen-diagram-surface-expanded > svg,\s*\.zen-diagram-pan-content \.mermaid svg\s*\{[^}]*width:\s*100%\s*!important;/s
+    )
+  })
+
+  it('supports a fullscreen expanded diagram viewport', () => {
+    expect(stylesSource).toMatch(
+      /\.zen-diagram-modal-shell-fullscreen\s*\{[^}]*height:\s*calc\(100vh - 44px\);/s
+    )
+    expect(stylesSource).toMatch(
+      /\.zen-diagram-modal-shell-fullscreen\s*\{[^}]*margin-top:\s*44px;/s
+    )
+    expect(stylesSource).toMatch(
+      /\.zen-diagram-pan-viewport-fill\s*\{[^}]*height:\s*100%;/s
+    )
+    expect(stylesSource).toMatch(
+      /\.zen-diagram-pan-viewport-fill\s*\{[^}]*min-height:\s*0;/s
+    )
+  })
 })

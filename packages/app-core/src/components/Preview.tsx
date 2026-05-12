@@ -20,8 +20,22 @@ import {
   enhanceCodeBlockCopy,
   toggleCodeBlockFold,
 } from "../lib/code-block-copy";
+import {
+  diagramZoomLabel,
+  fitDiagramToViewport,
+  stepDiagramZoom,
+  zoomDiagramAtPoint,
+  type DiagramPanZoomState,
+} from "../lib/diagram-pan-zoom";
+import {
+  diagramTabPath,
+  diagramTitleFromKind,
+  type DiagramTabKind,
+  type DiagramTabPayload,
+} from "../lib/diagram-tabs";
 import { NoteHoverPreview } from "./NoteHoverPreview";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { ArrowUpRightIcon, MaximizeIcon, MinimizeIcon } from "./icons";
 
 // ---------------------------------------------------------------------------
 // Mermaid: lazy singleton + theme-aware render
@@ -222,7 +236,7 @@ function buildMermaidTheme(mode: "light" | "dark"): MermaidThemeConfig {
   };
 }
 
-type ExpandedDiagramKind = "mermaid" | "tikz" | "jsxgraph" | "function-plot";
+type ExpandedDiagramKind = DiagramTabKind;
 
 interface ExpandedDiagram {
   kind: ExpandedDiagramKind;
@@ -306,21 +320,7 @@ async function renderMermaidBlocks(
   }
 }
 
-export const Preview = memo(function Preview({
-  markdown,
-  notePath,
-  onRequestEdit,
-  onRendered,
-}: {
-  markdown: string;
-  notePath: string;
-  onRequestEdit?: (() => void) | null;
-  onRendered?: (() => void) | null;
-}): JSX.Element {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const vault = useStore((s) => s.vault);
-  const notes = useStore((s) => s.notes);
-  const assetFiles = useStore((s) => s.assetFiles);
+function usePreviewDiagramThemeMode(): "light" | "dark" {
   const themeId = useStore((s) => s.themeId);
   const themeFamily = useStore((s) => s.themeFamily);
   const themeMode = useStore((s) => s.themeMode);
@@ -337,11 +337,29 @@ export const Preview = memo(function Preview({
     mql.addEventListener("change", handler);
     return () => mql.removeEventListener("change", handler);
   }, []);
-  const effectiveMode: "light" | "dark" = useMemo(() => {
+  return useMemo(() => {
     const resolvedId =
       themeMode === "auto" ? resolveAuto(themeFamily, prefersDark, themeId) : themeId;
     return THEMES.find((t) => t.id === resolvedId)?.mode ?? "light";
   }, [themeId, themeFamily, themeMode, prefersDark]);
+}
+
+export const Preview = memo(function Preview({
+  markdown,
+  notePath,
+  onRequestEdit,
+  onRendered,
+}: {
+  markdown: string;
+  notePath: string;
+  onRequestEdit?: (() => void) | null;
+  onRendered?: (() => void) | null;
+}): JSX.Element {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const vault = useStore((s) => s.vault);
+  const notes = useStore((s) => s.notes);
+  const assetFiles = useStore((s) => s.assetFiles);
+  const effectiveMode = usePreviewDiagramThemeMode();
   const selectNote = useStore((s) => s.selectNote);
   const openNoteInTab = useStore((s) => s.openNoteInTab);
   const setView = useStore((s) => s.setView);
@@ -761,6 +779,11 @@ export const Preview = memo(function Preview({
         <ExpandedDiagramModal
           diagram={expandedDiagram}
           themeKey={effectiveMode}
+          onOpenInTab={() => {
+            const path = diagramTabPath(expandedDiagram.kind, expandedDiagram.source);
+            setExpandedDiagram(null);
+            void openNoteInTab(path);
+          }}
           onClose={() => setExpandedDiagram(null)}
         />
       )}
@@ -771,28 +794,190 @@ export const Preview = memo(function Preview({
 function ExpandedDiagramModal({
   diagram,
   themeKey,
+  onOpenInTab,
   onClose,
 }: {
   diagram: ExpandedDiagram;
   themeKey: "light" | "dark";
+  onOpenInTab: () => void;
   onClose: () => void;
 }): JSX.Element {
-  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [fullScreen, setFullScreen] = useState(false);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key === "Escape") {
         e.preventDefault();
         onClose();
+        return;
+      }
+      if (e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setFullScreen((value) => !value);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  return createPortal(
+    <div
+      className={[
+        "fixed inset-0 z-[80] flex bg-black/60 backdrop-blur-sm",
+        fullScreen
+          ? "items-start justify-center p-0"
+          : "items-center justify-center p-4 md:p-6",
+      ].join(" ")}
+      onClick={onClose}
+    >
+      <DiagramPanZoomFrame
+        diagram={diagram}
+        themeKey={themeKey}
+        variant="modal"
+        title="Expanded diagram"
+        fullScreen={fullScreen}
+        onToggleFullScreen={() => setFullScreen((value) => !value)}
+        onOpenInTab={onOpenInTab}
+        onClose={onClose}
+      />
+    </div>,
+    document.body,
+  );
+}
+
+export function DiagramTabView({
+  diagram,
+}: {
+  diagram: DiagramTabPayload | null;
+}): JSX.Element {
+  const themeKey = usePreviewDiagramThemeMode();
+
+  if (!diagram) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-paper-100 px-6 text-sm text-ink-500">
+        This temporary diagram tab is no longer available.
+      </div>
+    );
+  }
+
+  return (
+    <DiagramPanZoomFrame
+      diagram={diagram}
+      themeKey={themeKey}
+      variant="tab"
+      title={diagramTitleFromKind(diagram.kind)}
+    />
+  );
+}
+
+function DiagramPanZoomFrame({
+  diagram,
+  themeKey,
+  variant,
+  title,
+  fullScreen = false,
+  onToggleFullScreen,
+  onOpenInTab,
+  onClose,
+}: {
+  diagram: ExpandedDiagram;
+  themeKey: "light" | "dark";
+  variant: "modal" | "tab";
+  title: string;
+  fullScreen?: boolean;
+  onToggleFullScreen?: () => void;
+  onOpenInTab?: () => void;
+  onClose?: () => void;
+}): JSX.Element {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
+  const [transform, setTransform] = useState<DiagramPanZoomState>({
+    zoom: 1,
+    pan: { x: 0, y: 0 },
+  });
+  const transformRef = useRef(transform);
+  const fillViewport = fullScreen || variant === "tab";
+
+  useEffect(() => {
+    transformRef.current = transform;
+  }, [transform]);
+
+  const centerDiagram = useCallback((): void => {
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content) return;
+
+    const viewportRect = viewport.getBoundingClientRect();
+    const contentWidth = content.offsetWidth || content.getBoundingClientRect().width;
+    const contentHeight = content.offsetHeight || content.getBoundingClientRect().height;
+    setTransform(
+      fitDiagramToViewport(
+        { width: viewportRect.width, height: viewportRect.height },
+        { width: contentWidth, height: contentHeight },
+      ),
+    );
+  }, []);
+
+  const zoomFromViewportPoint = useCallback(
+    (direction: 1 | -1, point: { x: number; y: number }): void => {
+      setTransform((state) =>
+        zoomDiagramAtPoint(state, stepDiagramZoom(state.zoom, direction), point),
+      );
+    },
+    [],
+  );
+
+  const zoomFromCenter = useCallback(
+    (direction: 1 | -1): void => {
+      const viewport = viewportRef.current;
+      if (!viewport) return;
+      const rect = viewport.getBoundingClientRect();
+      setTransform((state) =>
+        zoomDiagramAtPoint(state, stepDiagramZoom(state.zoom, direction), {
+          x: rect.width / 2,
+          y: rect.height / 2,
+        }),
+      );
+    },
+    [],
+  );
+
+  useEffect(() => {
+    requestAnimationFrame(centerDiagram);
+  }, [centerDiagram, fillViewport]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || typeof ResizeObserver === "undefined") return;
+
+    let frame = 0;
+    const scheduleCenter = (): void => {
+      if (frame) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(centerDiagram);
+    };
+    const observer = new ResizeObserver(scheduleCenter);
+    observer.observe(viewport);
+    if (contentRef.current) observer.observe(contentRef.current);
+
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [centerDiagram]);
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    let cancelled = false;
+    setTransform({ zoom: 1, pan: { x: 0, y: 0 } });
     host.innerHTML = "";
     const el = document.createElement("div");
     el.className = DIAGRAM_CLASS_BY_KIND[diagram.kind];
@@ -802,44 +987,233 @@ function ExpandedDiagramModal({
     el.dataset.zenDiagramExpanded = "true";
     host.appendChild(el);
 
-    if (diagram.kind === "mermaid") {
-      void renderMermaidBlocks(host, themeKey, { expanded: true });
-    } else {
-      void renderDiagrams(host, { themeKey, expanded: true });
-    }
-  }, [diagram, themeKey]);
+    const render = async (): Promise<void> => {
+      if (diagram.kind === "mermaid") {
+        await renderMermaidBlocks(host, themeKey, { expanded: true });
+      } else {
+        await renderDiagrams(host, { themeKey, expanded: true });
+      }
+      if (!cancelled) requestAnimationFrame(centerDiagram);
+    };
 
-  return createPortal(
+    void render();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [centerDiagram, diagram, themeKey]);
+
+  const handleWheel = useCallback(
+    (e: React.WheelEvent<HTMLDivElement>): void => {
+      e.preventDefault();
+      const viewport = viewportRef.current;
+      if (!viewport) return;
+      const rect = viewport.getBoundingClientRect();
+      const direction: 1 | -1 = e.deltaY < 0 ? 1 : -1;
+      zoomFromViewportPoint(direction, {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      });
+    },
+    [zoomFromViewportPoint],
+  );
+
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>): void => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const current = transformRef.current;
+    dragRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: current.pan.x,
+      originY: current.pan.y,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, []);
+
+  const stopDragging = useCallback((e: React.PointerEvent<HTMLDivElement>): void => {
+    if (dragRef.current?.pointerId !== e.pointerId) return;
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }, []);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>): void => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    e.preventDefault();
+    setTransform((state) => ({
+      ...state,
+      pan: {
+        x: drag.originX + e.clientX - drag.startX,
+        y: drag.originY + e.clientY - drag.startY,
+      },
+    }));
+  }, []);
+
+  const handleViewportKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>): void => {
+      const panStep = e.shiftKey ? 80 : 32;
+      if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        zoomFromCenter(1);
+        return;
+      }
+      if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        zoomFromCenter(-1);
+        return;
+      }
+      if (e.key === "0") {
+        e.preventDefault();
+        centerDiagram();
+        return;
+      }
+      const delta =
+        e.key === "ArrowLeft"
+          ? { x: panStep, y: 0 }
+          : e.key === "ArrowRight"
+            ? { x: -panStep, y: 0 }
+            : e.key === "ArrowUp"
+              ? { x: 0, y: panStep }
+              : e.key === "ArrowDown"
+                ? { x: 0, y: -panStep }
+                : null;
+      if (!delta) return;
+      e.preventDefault();
+      setTransform((state) => ({
+        ...state,
+        pan: { x: state.pan.x + delta.x, y: state.pan.y + delta.y },
+      }));
+    },
+    [centerDiagram, zoomFromCenter],
+  );
+
+  return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm md:p-6"
-      onClick={onClose}
+      className={[
+        "flex overflow-hidden border border-paper-300/70 bg-paper-100",
+        variant === "tab"
+          ? "min-h-0 flex-1 flex-col rounded-none border-0 shadow-none"
+          : fullScreen
+            ? "zen-diagram-modal-shell-fullscreen flex-col rounded-none border-0 shadow-float"
+            : "w-[min(1360px,96vw)] flex-col rounded-2xl shadow-float",
+      ].join(" ")}
+      onClick={(e) => e.stopPropagation()}
     >
-      <div
-        className="w-[min(1360px,96vw)] overflow-hidden rounded-2xl border border-paper-300/70 bg-paper-100 shadow-float"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-paper-300/60 px-5 py-3">
-          <div>
-            <div className="text-sm font-semibold text-ink-900">
-              Expanded diagram
-            </div>
-            <div className="text-xs text-ink-500">
-              Press Esc or click outside to close.
-            </div>
+      <div className="flex items-center justify-between border-b border-paper-300/60 px-5 py-3">
+        <div>
+          <div className="text-sm font-semibold text-ink-900">
+            {title}
           </div>
+          <div className="text-xs uppercase tracking-wide text-ink-500">
+            {diagram.kind}
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
           <button
             type="button"
-            onClick={onClose}
-            className="rounded-md border border-paper-300 bg-paper-50 px-2.5 py-1 text-sm text-ink-700 transition hover:bg-paper-200"
+            onClick={() => zoomFromCenter(-1)}
+            className="zen-diagram-modal-control"
+            aria-label="Zoom out"
+            title="Zoom out"
           >
-            Close
+            −
           </button>
-        </div>
-        <div className="max-h-[90vh] overflow-auto p-4 md:p-5">
-          <div ref={hostRef} className="zen-diagram-modal-host" />
+          <button
+            type="button"
+            onClick={centerDiagram}
+            className="zen-diagram-modal-zoom"
+            aria-label="Reset zoom"
+            title="Reset zoom"
+          >
+            {diagramZoomLabel(transform.zoom)}
+          </button>
+          <button
+            type="button"
+            onClick={() => zoomFromCenter(1)}
+            className="zen-diagram-modal-control"
+            aria-label="Zoom in"
+            title="Zoom in"
+          >
+            +
+          </button>
+          {onOpenInTab && (
+            <button
+              type="button"
+              onClick={onOpenInTab}
+              className="zen-diagram-modal-control"
+              aria-label="Open diagram in tab"
+              title="Open in tab"
+            >
+              <ArrowUpRightIcon className="h-4 w-4" />
+            </button>
+          )}
+          {onToggleFullScreen && (
+            <button
+              type="button"
+              onClick={onToggleFullScreen}
+              className="zen-diagram-modal-control"
+              aria-pressed={fullScreen}
+              aria-label={fullScreen ? "Exit full screen" : "Open full screen"}
+              title={fullScreen ? "Exit full screen" : "Full screen"}
+            >
+              {fullScreen ? (
+                <MinimizeIcon className="h-4 w-4" />
+              ) : (
+                <MaximizeIcon className="h-4 w-4" />
+              )}
+            </button>
+          )}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="zen-diagram-modal-control"
+              aria-label="Close expanded diagram"
+              title="Close"
+            >
+              ×
+            </button>
+          )}
         </div>
       </div>
-    </div>,
-    document.body,
+      <div
+        className={[
+          "p-3 md:p-4",
+          fillViewport ? "min-h-0 flex-1" : "",
+        ].join(" ")}
+      >
+        <div
+          ref={viewportRef}
+          className={[
+            "zen-diagram-pan-viewport",
+            fillViewport ? "zen-diagram-pan-viewport-fill" : "",
+          ].join(" ")}
+          tabIndex={0}
+          role="region"
+          aria-label="Expanded diagram viewport"
+          onWheel={handleWheel}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={stopDragging}
+          onPointerCancel={stopDragging}
+          onDoubleClick={centerDiagram}
+          onKeyDown={handleViewportKeyDown}
+        >
+          <div
+            ref={contentRef}
+            className="zen-diagram-pan-content"
+            style={{
+              transform: `translate(${transform.pan.x}px, ${transform.pan.y}px) scale(${transform.zoom})`,
+            }}
+          >
+            <div ref={hostRef} className="zen-diagram-modal-host" />
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

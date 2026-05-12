@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { HELP_TAB_PATH } from '@shared/help'
 import { assetTabPath } from './asset-tabs'
+import { diagramTabPath } from './diagram-tabs'
 import type { PaneLayout } from './pane-layout'
 import {
   initialWorkspaceRestoreContentPaths,
@@ -45,13 +46,14 @@ describe('initialWorkspaceRestoreContentPaths', () => {
     ).toEqual(['inbox/active-left.md', 'inbox/active-right.md'])
   })
 
-  it('skips virtual, asset, missing, and duplicate active tabs', () => {
+  it('skips virtual, asset, diagram, missing, and duplicate active tabs', () => {
     const duplicate = 'inbox/shared.md'
+    const diagramPath = diagramTabPath('mermaid', 'flowchart LR\nA --> B')
     const layout: PaneLayout = {
       kind: 'split',
       id: 'root',
       direction: 'column',
-      sizes: [0.25, 0.25, 0.25, 0.25],
+      sizes: [0.2, 0.2, 0.2, 0.2, 0.2],
       children: [
         {
           kind: 'leaf',
@@ -66,6 +68,13 @@ describe('initialWorkspaceRestoreContentPaths', () => {
           tabs: [assetTabPath('diagram.png')],
           pinnedTabs: [],
           activeTab: assetTabPath('diagram.png')
+        },
+        {
+          kind: 'leaf',
+          id: 'diagram',
+          tabs: [diagramPath],
+          pinnedTabs: [],
+          activeTab: diagramPath
         },
         {
           kind: 'leaf',

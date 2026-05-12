@@ -67,7 +67,7 @@ import { livePreviewPlugin } from '../lib/cm-live-preview'
 import { slashCommandSource, slashCommandRender } from '../lib/cm-slash-commands'
 import { dateShortcutSource } from '../lib/cm-date-shortcuts'
 import { wikilinkSource } from '../lib/cm-wikilinks'
-import { LazyPreview as Preview } from './LazyPreview'
+import { LazyDiagramTabView, LazyPreview as Preview } from './LazyPreview'
 import { ConnectionsPanel } from './ConnectionsPanel'
 import { OutlinePanel } from './OutlinePanel'
 import { CommentsPanel, type CommentDraft } from './CommentsPanel'
@@ -144,6 +144,11 @@ import {
   assetTitleFromPath,
   isAssetTabPath
 } from '../lib/asset-tabs'
+import {
+  diagramFromTabPath,
+  diagramTitleFromTabPath,
+  isDiagramTabPath
+} from '../lib/diagram-tabs'
 import { classifyLocalAssetHref } from '../lib/local-assets'
 import { getKeymapDisplay, type KeymapId } from '../lib/keymaps'
 import { isTabStripOverflowing } from '../lib/tab-strip-overflow'
@@ -1909,110 +1914,8 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
     () => {
       const pinnedSet = new Set(pinnedTabs)
       return tabs.map((path) => {
-        if (isTasksTabPath(path)) {
-          return {
-            path,
-            title: 'Tasks',
-            pinned: pinnedSet.has(path),
-            isQuick: false,
-            isTasks: true,
-            isTag: false,
-            isHelp: false,
-            isArchive: false,
-            isTrash: false,
-            isAsset: false
-          }
-        }
-        if (isQuickNotesTabPath(path)) {
-          return {
-            path,
-            title: folderLabels.quick,
-            pinned: pinnedSet.has(path),
-            isQuick: true,
-            isTasks: false,
-            isTag: false,
-            isHelp: false,
-            isArchive: false,
-            isTrash: false,
-            isAsset: false
-          }
-        }
-        if (isTagsTabPath(path)) {
-          return {
-            path,
-            title: 'Tags',
-            pinned: pinnedSet.has(path),
-            isQuick: false,
-            isTasks: false,
-            isTag: true,
-            isHelp: false,
-            isArchive: false,
-            isTrash: false,
-            isAsset: false
-          }
-        }
-        if (isHelpTabPath(path)) {
-          return {
-            path,
-            title: 'Help',
-            pinned: pinnedSet.has(path),
-            isQuick: false,
-            isTasks: false,
-            isTag: false,
-            isHelp: true,
-            isArchive: false,
-            isTrash: false,
-            isAsset: false
-          }
-        }
-        if (isArchiveTabPath(path)) {
-          return {
-            path,
-            title: folderLabels.archive,
-            pinned: pinnedSet.has(path),
-            isQuick: false,
-            isTasks: false,
-            isTag: false,
-            isHelp: false,
-            isArchive: true,
-            isTrash: false,
-            isAsset: false
-          }
-        }
-        if (isTrashTabPath(path)) {
-          return {
-            path,
-            title: folderLabels.trash,
-            pinned: pinnedSet.has(path),
-            isQuick: false,
-            isTasks: false,
-            isTag: false,
-            isHelp: false,
-            isArchive: false,
-            isTrash: true,
-            isAsset: false
-          }
-        }
-        if (isAssetTabPath(path)) {
-          const assetPath = assetPathFromTab(path)
-          return {
-            path,
-            title: assetTitleFromPath(assetPath),
-            pinned: pinnedSet.has(path),
-            isQuick: false,
-            isTasks: false,
-            isTag: false,
-            isHelp: false,
-            isArchive: false,
-            isTrash: false,
-            isAsset: true
-          }
-        }
-        const meta = path === content?.path ? content : notes.find((n) => n.path === path)
-        const title = meta?.title ?? path.split('/').pop()?.replace(/\.md$/i, '') ?? path
-        return {
+        const base = {
           path,
-          title,
           pinned: pinnedSet.has(path),
           isQuick: false,
           isTasks: false,
@@ -2020,7 +1923,71 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
           isHelp: false,
           isArchive: false,
           isTrash: false,
-          isAsset: false
+          isAsset: false,
+          isDiagram: false
+        }
+        if (isTasksTabPath(path)) {
+          return {
+            ...base,
+            title: 'Tasks',
+            isTasks: true
+          }
+        }
+        if (isQuickNotesTabPath(path)) {
+          return {
+            ...base,
+            title: folderLabels.quick,
+            isQuick: true
+          }
+        }
+        if (isTagsTabPath(path)) {
+          return {
+            ...base,
+            title: 'Tags',
+            isTag: true
+          }
+        }
+        if (isHelpTabPath(path)) {
+          return {
+            ...base,
+            title: 'Help',
+            isHelp: true
+          }
+        }
+        if (isArchiveTabPath(path)) {
+          return {
+            ...base,
+            title: folderLabels.archive,
+            isArchive: true
+          }
+        }
+        if (isTrashTabPath(path)) {
+          return {
+            ...base,
+            title: folderLabels.trash,
+            isTrash: true
+          }
+        }
+        if (isAssetTabPath(path)) {
+          const assetPath = assetPathFromTab(path)
+          return {
+            ...base,
+            title: assetTitleFromPath(assetPath),
+            isAsset: true
+          }
+        }
+        if (isDiagramTabPath(path)) {
+          return {
+            ...base,
+            title: diagramTitleFromTabPath(path),
+            isDiagram: true
+          }
+        }
+        const meta = path === content?.path ? content : notes.find((n) => n.path === path)
+        const title = meta?.title ?? path.split('/').pop()?.replace(/\.md$/i, '') ?? path
+        return {
+          ...base,
+          title,
         }
       })
     },
@@ -2090,7 +2057,8 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
       isHelpTabPath(path) ||
       isArchiveTabPath(path) ||
       isTrashTabPath(path) ||
-      isAssetTabPath(path)
+      isAssetTabPath(path) ||
+      isDiagramTabPath(path)
     ) {
       return [
         { label: 'Close', onSelect: async () => closeTabInPane(paneId, path) },
@@ -2194,6 +2162,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
       isArchive: boolean
       isTrash: boolean
       isAsset: boolean
+      isDiagram: boolean
     }) => {
       const active = tab.path === activeTab
       const isVirtual =
@@ -2203,7 +2172,8 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
         tab.isHelp ||
         tab.isArchive ||
         tab.isTrash ||
-        tab.isAsset
+        tab.isAsset ||
+        tab.isDiagram
       return (
         <div
           key={tab.path}
@@ -2324,6 +2294,9 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
                 <TrashIcon width={13} height={13} className="shrink-0 text-accent" />
               )}
               {tab.isAsset && (
+                <DocumentIcon width={13} height={13} className="shrink-0 text-accent" />
+              )}
+              {tab.isDiagram && (
                 <DocumentIcon width={13} height={13} className="shrink-0 text-accent" />
               )}
               <span className="min-w-0 flex-1 truncate">{tab.title}</span>
@@ -2691,6 +2664,8 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             <TrashView />
           ) : activeTab && isAssetTabPath(activeTab) ? (
             <AssetTabView tabPath={activeTab} vaultRoot={vault?.root ?? null} />
+          ) : activeTab && isDiagramTabPath(activeTab) ? (
+            <LazyDiagramTabView diagram={diagramFromTabPath(activeTab)} />
           ) : content ? (
             <div
               className={[

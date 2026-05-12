@@ -1,7 +1,12 @@
 import { lazy, Suspense } from 'react'
+import type { DiagramTabPayload } from '../lib/diagram-tabs'
 
 const PreviewImpl = lazy(() =>
   import('./Preview').then((mod) => ({ default: mod.Preview }))
+)
+
+const DiagramTabViewImpl = lazy(() =>
+  import('./Preview').then((mod) => ({ default: mod.DiagramTabView }))
 )
 
 export function LazyPreview({
@@ -23,6 +28,18 @@ export function LazyPreview({
         onRequestEdit={onRequestEdit}
         onRendered={onRendered}
       />
+    </Suspense>
+  )
+}
+
+export function LazyDiagramTabView({
+  diagram
+}: {
+  diagram: DiagramTabPayload | null
+}): JSX.Element {
+  return (
+    <Suspense fallback={null}>
+      <DiagramTabViewImpl diagram={diagram} />
     </Suspense>
   )
 }

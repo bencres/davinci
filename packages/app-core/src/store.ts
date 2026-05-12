@@ -3897,6 +3897,21 @@ export const useStore = create<Store>((set, get) => {
       return
     }
 
+    if (isWorkspaceVirtualTabPath(path)) {
+      set((cur) => {
+        const nextLayout =
+          updateLeaf(cur.paneLayout, paneId, (l) => leafWithAddedTab(l, path)) ??
+          cur.paneLayout
+        return {
+          paneLayout: nextLayout,
+          activePaneId: paneId,
+          focusedPanel: 'editor',
+          ...activeFieldsFrom(nextLayout, paneId, cur.noteContents, cur.noteDirty)
+        }
+      })
+      return
+    }
+
     const needContent = !s.noteContents[path]
     if (needContent) {
       set({ loadingNote: paneId === s.activePaneId })

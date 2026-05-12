@@ -5,6 +5,7 @@ import { isTagsTabPath } from '@shared/tags'
 import { isTasksTabPath } from '@shared/tasks'
 import { isTrashTabPath } from '@shared/trash'
 import { isAssetTabPath } from './asset-tabs'
+import { isDiagramTabPath } from './diagram-tabs'
 import { allLeaves, type PaneLayout } from './pane-layout'
 
 export function isWorkspaceVirtualTabPath(path: string): boolean {
@@ -15,7 +16,8 @@ export function isWorkspaceVirtualTabPath(path: string): boolean {
     isHelpTabPath(path) ||
     isArchiveTabPath(path) ||
     isTrashTabPath(path) ||
-    isAssetTabPath(path)
+    isAssetTabPath(path) ||
+    isDiagramTabPath(path)
   )
 }
 
