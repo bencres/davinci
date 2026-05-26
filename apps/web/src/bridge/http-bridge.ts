@@ -27,9 +27,11 @@ import type {
   CliInstallStatus,
   DeletedAsset,
   DirectoryBrowseResult,
+  ExternalFileContent,
   FolderEntry,
   ImportedAsset,
   LocalVaultEntry,
+  MoveExternalFileResult,
   NoteComment,
   NoteCommentInput,
   NoteContent,
@@ -855,6 +857,18 @@ async function openVaultWindow(): Promise<VaultInfo | null> {
   return null
 }
 
+async function readExternalFile(): Promise<ExternalFileContent> {
+  return notImplemented('readExternalFile')
+}
+
+async function writeExternalFile(_body: string): Promise<void> {
+  notImplemented('writeExternalFile')
+}
+
+async function moveExternalFileToVault(): Promise<MoveExternalFileResult> {
+  return notImplemented('moveExternalFileToVault')
+}
+
 async function toggleQuickCapture(): Promise<void> {
   // Web build can't bind a system-wide shortcut; the quick capture
   // window is desktop-only.
@@ -1086,6 +1100,9 @@ export const httpBridge: ZenBridge = {
   windowClose,
   openNoteWindow,
   openVaultWindow,
+  readExternalFile,
+  writeExternalFile,
+  moveExternalFileToVault,
   toggleQuickCapture,
   getQuickCaptureHotkey,
   setQuickCaptureHotkey,

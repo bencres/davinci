@@ -83,6 +83,9 @@ export const IPC = {
   APP_PLATFORM: 'app:platform',
   APP_GET_QUICK_CAPTURE_HOTKEY: 'app:get-quick-capture-hotkey',
   APP_SET_QUICK_CAPTURE_HOTKEY: 'app:set-quick-capture-hotkey',
+  APP_READ_EXTERNAL_FILE: 'app:read-external-file',
+  APP_WRITE_EXTERNAL_FILE: 'app:write-external-file',
+  APP_MOVE_EXTERNAL_FILE_TO_VAULT: 'app:move-external-file-to-vault',
   TIKZ_RENDER: 'tikz:render',
   MCP_STATUS: 'mcp:status',
   MCP_INSTALL: 'mcp:install',
@@ -394,6 +397,23 @@ export interface PastedImageInput {
 export interface VaultInfo {
   root: string
   name: string
+}
+
+/** A markdown file opened from outside any vault (standalone editor window). */
+export interface ExternalFileContent {
+  /** Absolute path on disk. */
+  path: string
+  /** File name including extension. */
+  name: string
+  /** Raw markdown body. */
+  body: string
+}
+
+export interface MoveExternalFileResult {
+  /** Vault root the file was moved into. */
+  vaultRoot: string
+  /** Vault-relative path of the moved note, POSIX-style. */
+  relPath: string
 }
 
 export interface LocalVaultEntry extends VaultInfo {

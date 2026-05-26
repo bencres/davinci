@@ -147,6 +147,12 @@ const SECTIONS: Array<{ heading: string; rows: CommandRow[] }> = [
     ]
   },
   {
+    heading: 'OPEN',
+    rows: [
+      { name: 'open <file.md>', description: 'Open markdown files in the ZenNotes app, in a vault or not' }
+    ]
+  },
+  {
     heading: 'MCP',
     rows: [
       { name: 'mcp', description: 'Start the MCP stdio server (Claude / Codex)' }
@@ -171,7 +177,8 @@ const EXAMPLES: string[] = [
   'pbpaste | zen append "inbox/Daily.md" --body -',
   'zen search "deadline" --json | jq \'.[].path\'',
   'zen list --tag idea --limit 5',
-  'zen task list --unchecked --tag work'
+  'zen task list --unchecked --tag work',
+  'zen open ~/Downloads/notes.md'
 ]
 
 function header(width: number): string[] {

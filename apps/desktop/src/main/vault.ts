@@ -2197,6 +2197,27 @@ export async function createNote(
   return await readMeta(root, abs, folder)
 }
 
+/**
+ * Move a markdown file that lives outside the vault into the vault's
+ * primary notes area, de-duplicating the title on collision. The source
+ * file is removed once copied. Returns the new note's metadata.
+ */
+export async function importExternalNote(root: string, sourceAbsPath: string): Promise<NoteMeta> {
+  const source = path.resolve(sourceAbsPath)
+  const destDir = await folderRoot(root, 'inbox')
+  await fs.mkdir(destDir, { recursive: true })
+  const baseTitle = path.basename(source, path.extname(source)) || 'Untitled'
+  const finalTitle = await uniqueTitle(destDir, baseTitle)
+  const destAbs = path.join(destDir, `${finalTitle}.md`)
+  const body = await fs.readFile(source, 'utf8')
+  await fs.writeFile(destAbs, body, 'utf8')
+  await fs.rm(source, { force: true })
+  const rel = toPosix(path.relative(root, destAbs))
+  invalidateNoteMetaCache(root, rel)
+  invalidateVaultTextSearchCache(root)
+  return await readMeta(root, destAbs, folderForRelativePath(rel) ?? 'inbox')
+}
+
 export async function renameNote(
   root: string,
   rel: string,

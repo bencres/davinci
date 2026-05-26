@@ -52,7 +52,7 @@ const SAVE_DEBOUNCE_MS = 350
 
 const programmatic = Annotation.define<boolean>()
 
-const paperHighlight = HighlightStyle.define([
+export const paperHighlight = HighlightStyle.define([
   { tag: t.heading1, class: 'tok-heading1' },
   { tag: t.heading2, class: 'tok-heading2' },
   { tag: t.heading3, class: 'tok-heading3' },
@@ -86,7 +86,7 @@ const paperHighlight = HighlightStyle.define([
   { tag: t.punctuation, class: 'tok-punct' }
 ])
 
-interface FloatingPrefs {
+export interface FloatingPrefs {
   vimMode: boolean
   livePreview: boolean
   themeId: string
@@ -101,7 +101,7 @@ interface FloatingPrefs {
   monoFont: string | null
 }
 
-function loadFloatingPrefs(): FloatingPrefs {
+export function loadFloatingPrefs(): FloatingPrefs {
   const fallback: FloatingPrefs = {
     vimMode: true,
     livePreview: true,
@@ -138,7 +138,7 @@ function loadFloatingPrefs(): FloatingPrefs {
   }
 }
 
-function lineNumberExtension(mode: LineNumberMode): Extension {
+export function lineNumberExtension(mode: LineNumberMode): Extension {
   if (mode === 'off') return []
   return [
     lineNumbers({
@@ -152,7 +152,7 @@ function lineNumberExtension(mode: LineNumberMode): Extension {
   ]
 }
 
-function applyTheme(prefs: FloatingPrefs): void {
+export function applyTheme(prefs: FloatingPrefs): void {
   const html = document.documentElement
   const mql = window.matchMedia('(prefers-color-scheme: dark)')
   let id = prefs.themeId

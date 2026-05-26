@@ -13,9 +13,11 @@ import type {
   CliInstallStatus,
   DeletedAsset,
   DirectoryBrowseResult,
+  ExternalFileContent,
   FolderEntry,
   ImportedAsset,
   LocalVaultEntry,
+  MoveExternalFileResult,
   ListNotesPageRequest,
   ListNotesPageResponse,
   NoteComment,
@@ -404,6 +406,12 @@ const api: ZenBridge = {
     await refreshRemoteWorkspaceInfo()
     return vault
   },
+  readExternalFile: (): Promise<ExternalFileContent> =>
+    ipcRenderer.invoke(IPC.APP_READ_EXTERNAL_FILE),
+  writeExternalFile: (body: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.APP_WRITE_EXTERNAL_FILE, body),
+  moveExternalFileToVault: (): Promise<MoveExternalFileResult> =>
+    ipcRenderer.invoke(IPC.APP_MOVE_EXTERNAL_FILE_TO_VAULT),
   toggleQuickCapture: (): Promise<void> =>
     ipcRenderer.invoke(IPC.WINDOW_TOGGLE_QUICK_CAPTURE),
   getQuickCaptureHotkey: (): Promise<string> =>

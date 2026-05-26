@@ -45,9 +45,12 @@ import { cmdTaskList, cmdTaskToggle } from './commands/tasks.js'
 import { cmdTagFind, cmdTagList } from './commands/tags.js'
 import { cmdVaultInfo } from './commands/vault.js'
 import { cmdCapture } from './commands/capture.js'
+import { cmdOpen } from './commands/open.js'
 import { cmdMcp } from './commands/mcp.js'
 
-const NO_VAULT_COMMANDS = new Set(['help', '--help', '-h', '--version', 'mcp'])
+// `open` hands a file path to the desktop app; the file can live outside
+// any vault, so it doesn't need the CLI to resolve a vault root.
+const NO_VAULT_COMMANDS = new Set(['help', '--help', '-h', '--version', 'mcp', 'open'])
 
 async function main(argv: string[]): Promise<number> {
   if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') {
@@ -101,7 +104,8 @@ async function main(argv: string[]): Promise<number> {
     'task list': cmdTaskList,
     'task toggle': cmdTaskToggle,
     'vault info': cmdVaultInfo,
-    capture: cmdCapture
+    capture: cmdCapture,
+    open: cmdOpen
   }
 
   const key = subcommand ? `${command} ${subcommand}` : command

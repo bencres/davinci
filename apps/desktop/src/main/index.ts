@@ -25,6 +25,8 @@ import type {
   NoteCommentInput,
   NoteFolder,
   DeletedAsset,
+  ExternalFileContent,
+  MoveExternalFileResult,
   PastedImageInput,
   LocalVaultEntry,
   RemoteWorkspaceInfo,
@@ -57,6 +59,7 @@ import {
   generateDemoTour,
   getVaultSettings,
   hasAssetsDir,
+  importExternalNote,
   importFiles,
   importPastedImage,
   invalidateNoteMetaCache,
@@ -134,6 +137,11 @@ import {
   parseOpenNoteDeepLink,
   ZENNOTES_DEEP_LINK_SCHEME
 } from './deep-links'
+import {
+  isMarkdownFilePath,
+  markdownPathsFromArgv,
+  resolveMarkdownOpenTarget
+} from './file-open'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const LOCAL_ASSET_SCHEME = 'zen-asset'
@@ -198,6 +206,18 @@ let currentZoomFactor = DEFAULT_ZOOM_FACTOR
 const pendingOpenNoteRequests: string[] = []
 const pendingFloatingNoteRequests: string[] = []
 let flushingFloatingNoteRequests = false
+
+// Markdown files handed to us by the OS (Finder "Open With", a file
+// double-click, drag onto the dock, or a Windows/Linux argv launch).
+const pendingFileOpens: { absPath: string; reuseMainWindow: boolean }[] = []
+// windowId -> absolute path of the standalone external file it edits.
+const externalFileWindows = new Map<number, string>()
+// Per-window renderer readiness, so note-open requests can target any
+// window (not just the main one) without racing the renderer mount.
+const readyWindowIds = new Set<number>()
+const pendingWindowNoteOpens = new Map<number, string[]>()
+let appStartupComplete = false
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
 function isMac(): boolean {
   return process.platform === 'darwin'
@@ -300,6 +320,200 @@ function handleStartupDeepLinks(argv: string[]): void {
     if (arg.startsWith(`${ZENNOTES_DEEP_LINK_SCHEME}:`)) {
       handleExternalOpenUrl(arg)
     }
+  }
+}
+
+function focusWindow(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+}
+
+// Dispatch a note-open to a specific window, deferring until that
+// window's renderer reports ready so the request isn't dropped on a
+// freshly created window.
+function queueNoteOpenForWindow(win: BrowserWindow, relPath: string): void {
+  if (win.isDestroyed()) return
+  if (readyWindowIds.has(win.id)) {
+    dispatchOpenNoteRequest(win, relPath)
+    return
+  }
+  const list = pendingWindowNoteOpens.get(win.id) ?? []
+  list.push(relPath)
+  pendingWindowNoteOpens.set(win.id, list)
+}
+
+function flushWindowNoteOpens(win: BrowserWindow): void {
+  const list = pendingWindowNoteOpens.get(win.id)
+  if (!list || list.length === 0) return
+  pendingWindowNoteOpens.delete(win.id)
+  for (const relPath of list) dispatchOpenNoteRequest(win, relPath)
+}
+
+function findWindowForVaultRoot(root: string): BrowserWindow | null {
+  const target = path.resolve(root)
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    const vault = windowVaults.vaultForWindow(win.id)
+    if (vault && path.resolve(vault.root) === target) return win
+  }
+  return null
+}
+
+function queueMarkdownFileOpen(rawPath: string, reuseMainWindow: boolean): void {
+  pendingFileOpens.push({ absPath: path.resolve(rawPath), reuseMainWindow })
+  if (app.isReady()) void flushPendingFileOpens()
+}
+
+function handleStartupMarkdownArgs(argv: string[], reuseMainWindow: boolean): void {
+  for (const candidate of markdownPathsFromArgv(argv)) {
+    queueMarkdownFileOpen(candidate, reuseMainWindow)
+  }
+}
+
+// Returns true when at least one file produced (or focused) a window, so
+// the caller can skip opening a redundant default-vault window.
+async function flushPendingFileOpens(): Promise<boolean> {
+  if (!app.isReady() || pendingFileOpens.length === 0) return false
+  const items = pendingFileOpens.splice(0)
+  let openedAny = false
+  for (const item of items) {
+    try {
+      if (await openMarkdownFileFromOS(item.absPath, item.reuseMainWindow)) {
+        openedAny = true
+      }
+    } catch (err) {
+      console.error('Failed to open markdown file', item.absPath, err)
+    }
+  }
+  return openedAny
+}
+
+async function openMarkdownFileFromOS(absPath: string, reuseMainWindow: boolean): Promise<boolean> {
+  let stat
+  try {
+    stat = await fsp.stat(absPath)
+  } catch {
+    return false
+  }
+  if (!stat.isFile() || !isMarkdownFilePath(absPath)) return false
+
+  const cfg = await loadConfig()
+  const knownRoots: string[] = []
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    const vault = windowVaults.vaultForWindow(win.id)
+    if (vault) knownRoots.push(vault.root)
+  }
+  for (const entry of cfg.localVaults ?? []) knownRoots.push(entry.root)
+  if (cfg.vaultRoot) knownRoots.push(cfg.vaultRoot)
+
+  const target = resolveMarkdownOpenTarget(absPath, knownRoots)
+
+  if (target.kind === 'vault') {
+    const existing = findWindowForVaultRoot(target.vaultRoot)
+    if (existing) {
+      focusWindow(existing)
+      queueNoteOpenForWindow(existing, target.relPath)
+      return true
+    }
+    const win = await createWindow({
+      initialVaultRoot: target.vaultRoot,
+      persistInitialVault: true
+    })
+    if (!reuseMainWindow) focusWindow(win)
+    queueNoteOpenForWindow(win, target.relPath)
+    return true
+  }
+
+  openExternalFileWindow(target.absPath)
+  return true
+}
+
+// Pick a local vault to move an external file into: any open local
+// vault, else the active local vault, else the last-used vault on disk.
+async function resolveActiveLocalVault(): Promise<VaultInfo | null> {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    if (windowVaults.modeForWindow(win.id) !== 'local') continue
+    const vault = windowVaults.vaultForWindow(win.id)
+    if (vault) return vault
+  }
+  if (currentVault && currentWorkspaceMode === 'local') return currentVault
+  const cfg = await loadConfig()
+  if (cfg.vaultRoot) {
+    try {
+      await ensureVaultLayout(cfg.vaultRoot)
+      return vaultInfo(path.resolve(cfg.vaultRoot))
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+// Open a standalone editor window for a markdown file that lives outside
+// any vault. The window edits the file in place; the path is held here
+// per-window so the renderer can read/write/move it without ever passing
+// an arbitrary path back over IPC.
+function openExternalFileWindow(absPath: string): void {
+  const resolved = path.resolve(absPath)
+  for (const [winId, file] of externalFileWindows) {
+    if (path.resolve(file) !== resolved) continue
+    const existing = BrowserWindow.fromId(winId)
+    if (existing && !existing.isDestroyed()) {
+      focusWindow(existing)
+      return
+    }
+    externalFileWindows.delete(winId)
+  }
+
+  const mac = isMac()
+  const win = new BrowserWindow({
+    width: DEFAULT_WINDOW_WIDTH,
+    height: DEFAULT_WINDOW_HEIGHT,
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
+    show: false,
+    autoHideMenuBar: true,
+    titleBarStyle: mac ? 'hiddenInset' : 'hidden',
+    trafficLightPosition: { x: 16, y: 16 },
+    ...(mac
+      ? { backgroundColor: MAC_WINDOW_BACKGROUND_COLOR }
+      : { backgroundColor: '#faf7f0', icon: windowIconPath() }),
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+
+  externalFileWindows.set(win.id, resolved)
+  win.on('closed', () => {
+    externalFileWindows.delete(win.id)
+    readyWindowIds.delete(win.id)
+    pendingWindowNoteOpens.delete(win.id)
+    windowVaults.clearWindow(win.id)
+  })
+  win.webContents.on('did-start-loading', () => {
+    readyWindowIds.delete(win.id)
+  })
+  win.on('ready-to-show', () => win.show())
+
+  installNavigationGuards(win)
+  installZoomControls(win)
+  applyZoomFactor(win, currentZoomFactor)
+
+  const params = `?externalFile=${encodeURIComponent(resolved)}`
+  const devServerUrl = process.env['ELECTRON_RENDERER_URL']
+  if (devServerUrl) {
+    void win.loadURL(`${devServerUrl}${params}`)
+  } else {
+    void win.loadFile(path.join(__dirname, '../renderer/index.html'), {
+      search: params.slice(1)
+    })
   }
 }
 
@@ -678,6 +892,7 @@ async function createWindow(options: CreateWindowOptions = {}): Promise<BrowserW
     win.show()
   })
   win.webContents.on('did-start-loading', () => {
+    readyWindowIds.delete(win.id)
     if (mainWindow === win) mainWindowReadyForAppEvents = false
   })
   win.webContents.once('did-finish-load', () => {
@@ -694,6 +909,8 @@ async function createWindow(options: CreateWindowOptions = {}): Promise<BrowserW
   win.on('closed', () => {
     if (persistWindowStateTimer) clearTimeout(persistWindowStateTimer)
     windowVaults.clearWindow(win.id)
+    readyWindowIds.delete(win.id)
+    pendingWindowNoteOpens.delete(win.id)
     if (mainWindow === win) {
       mainWindow =
         BrowserWindow.getAllWindows().find((candidate) => candidate.id !== win.id && !candidate.isDestroyed()) ??
@@ -1642,7 +1859,10 @@ function registerIpc(): void {
   })
   on(IPC.APP_RENDERER_READY, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
-    if (!win || win !== mainWindow) return
+    if (!win) return
+    readyWindowIds.add(win.id)
+    flushWindowNoteOpens(win)
+    if (win !== mainWindow) return
     mainWindowReadyForAppEvents = true
     flushPendingOpenNoteRequests(win)
     void flushPendingFloatingNoteRequests()
@@ -2158,6 +2378,46 @@ function registerIpc(): void {
     return await openVaultInNewWindow(BrowserWindow.fromWebContents(event.sender))
   })
 
+  handle(IPC.APP_READ_EXTERNAL_FILE, async (event): Promise<ExternalFileContent> => {
+    const win = requireEventWindow(event)
+    const abs = externalFileWindows.get(win.id)
+    if (!abs || !isMarkdownFilePath(abs)) {
+      throw new Error('No markdown file is bound to this window.')
+    }
+    const body = await fsp.readFile(abs, 'utf8')
+    return { path: abs, name: path.basename(abs), body }
+  })
+
+  handle(IPC.APP_WRITE_EXTERNAL_FILE, async (event, body: string): Promise<void> => {
+    const win = requireEventWindow(event)
+    const abs = externalFileWindows.get(win.id)
+    if (!abs || !isMarkdownFilePath(abs)) {
+      throw new Error('No markdown file is bound to this window.')
+    }
+    await fsp.writeFile(abs, body, 'utf8')
+  })
+
+  handle(IPC.APP_MOVE_EXTERNAL_FILE_TO_VAULT, async (event): Promise<MoveExternalFileResult> => {
+    const win = requireEventWindow(event)
+    const abs = externalFileWindows.get(win.id)
+    if (!abs || !isMarkdownFilePath(abs)) {
+      throw new Error('No markdown file is bound to this window.')
+    }
+    const vault = await resolveActiveLocalVault()
+    if (!vault) {
+      throw new Error('Open a vault first, then move this file into it.')
+    }
+    const meta = await importExternalNote(vault.root, abs)
+    externalFileWindows.delete(win.id)
+    const targetWin =
+      findWindowForVaultRoot(vault.root) ??
+      (await createWindow({ initialVaultRoot: vault.root, persistInitialVault: true }))
+    focusWindow(targetWin)
+    queueNoteOpenForWindow(targetWin, meta.path)
+    if (!win.isDestroyed()) win.close()
+    return { vaultRoot: vault.root, relPath: meta.path }
+  })
+
   handle(IPC.WINDOW_TOGGLE_QUICK_CAPTURE, async () => {
     toggleQuickCaptureWindow()
   })
@@ -2668,6 +2928,14 @@ async function runMenuUpdateCheck(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  // A second launch (e.g. double-clicking a .md on Windows/Linux) hands
+  // its argv to the primary instance via 'second-instance' below, then
+  // quits here so there's only ever one ZenNotes process.
+  if (!gotSingleInstanceLock) {
+    app.quit()
+    return
+  }
+
   await migrateLegacyRemoteWorkspaceSecrets()
 
   protocol.handle(LOCAL_ASSET_SCHEME, async (request) => {
@@ -2721,8 +2989,15 @@ app.whenReady().then(async () => {
   initAppUpdater()
   registerAppDeepLinkProtocol()
   handleStartupDeepLinks(process.argv)
+  handleStartupMarkdownArgs(process.argv, true)
 
-  await ensureMainWindow()
+  // Honor a file ZenNotes was launched to open before falling back to a
+  // default-vault window, so double-clicking a .md doesn't also pop an
+  // unrelated window.
+  const openedFromFile = await flushPendingFileOpens()
+  if (!openedFromFile) {
+    await ensureMainWindow()
+  }
   void flushPendingFloatingNoteRequests()
   scheduleBackgroundAppUpdateCheck()
 
@@ -2746,6 +3021,8 @@ app.whenReady().then(async () => {
       persistInitialVault: false
     })
   })
+
+  appStartupComplete = true
 })
 
 app.on('open-url', (event, url) => {
@@ -2753,6 +3030,24 @@ app.on('open-url', (event, url) => {
   if (!handleExternalOpenUrl(url)) {
     console.warn(`Ignoring unsupported ${ZENNOTES_DEEP_LINK_SCHEME} URL: ${url}`)
   }
+})
+
+// macOS delivers Finder "Open With" / double-click / dock-drop here.
+// During cold start this can fire before the app is ready, so the
+// request is queued and flushed in whenReady; reuse the main window for
+// the launch file but spawn a fresh window once we're already running.
+app.on('open-file', (event, filePath) => {
+  event.preventDefault()
+  queueMarkdownFileOpen(filePath, !appStartupComplete)
+})
+
+// Windows/Linux: a relaunch (e.g. opening a .md while ZenNotes is
+// already running) forwards its argv here instead of starting a second
+// process.
+app.on('second-instance', (_event, argv) => {
+  handleStartupDeepLinks(argv)
+  handleStartupMarkdownArgs(argv, false)
+  if (mainWindow && !mainWindow.isDestroyed()) focusWindow(mainWindow)
 })
 
 app.on('window-all-closed', () => {

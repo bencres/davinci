@@ -3,9 +3,11 @@ import type {
   AssetMeta,
   CliInstallStatus,
   DeletedAsset,
+  ExternalFileContent,
   FolderEntry,
   ImportedAsset,
   LocalVaultEntry,
+  MoveExternalFileResult,
   ListNotesPageRequest,
   ListNotesPageResponse,
   NoteComment,
@@ -162,6 +164,13 @@ export interface ZenBridge {
   windowClose(): void
   openNoteWindow(relPath: string): Promise<void>
   openVaultWindow(): Promise<VaultInfo | null>
+
+  /** Read the markdown file bound to the current standalone editor window. */
+  readExternalFile(): Promise<ExternalFileContent>
+  /** Save the current standalone editor window's file back to disk. */
+  writeExternalFile(body: string): Promise<void>
+  /** Move the current standalone editor window's file into the active vault. */
+  moveExternalFileToVault(): Promise<MoveExternalFileResult>
   toggleQuickCapture(): Promise<void>
   getQuickCaptureHotkey(): Promise<string>
   setQuickCaptureHotkey(hotkey: string): Promise<{ ok: boolean; hotkey: string; error?: string }>
