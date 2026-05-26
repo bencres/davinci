@@ -1964,25 +1964,21 @@ textarea,
 }
 .prose-zen li.task-list-item {
   list-style: none;
+  position: relative;
   margin-left: -1.4em;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  column-gap: 0.5em;
-  row-gap: calc(var(--z-prose-block-gap) * 0.45);
-  align-items: flex-start;
+  padding-left: 1.5em;
 }
 .prose-zen li.task-list-item > p:first-child {
-  display: contents;
+  margin: 0;
 }
 .prose-zen li.task-list-item input[type="checkbox"] {
-  grid-column: 1;
-  margin-top: 0.45em;
+  position: absolute;
+  left: 0;
+  top: 0.45em;
   accent-color: theme("colors.accent.DEFAULT");
 }
-.prose-zen li.task-list-item > p:not(:first-child),
-.prose-zen li.task-list-item > ul,
-.prose-zen li.task-list-item > ol {
-  grid-column: 2;
+.prose-zen li.task-list-item > p:not(:first-child) {
+  margin: var(--z-prose-block-gap) 0 0;
 }
 .prose-zen li.task-list-item > ul,
 .prose-zen li.task-list-item > ol {
