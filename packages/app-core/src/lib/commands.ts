@@ -448,7 +448,11 @@ export function buildCommands(options?: { includeUnavailable?: boolean }): Comma
       id: 'tab.close',
       title: 'Close Tab',
       category: 'Tabs',
-      shortcut: shortcut('global.closeActiveTab'),
+      // In Vim mode the Mod+W binding resolves to Ctrl+W on Linux/Windows, which
+      // is the pane-command prefix — not close-tab — so showing it is misleading
+      // (#242). Vim closes the tab with `:q` (→ closeActiveNote), matching how
+      // save shows `:w`. Outside Vim, the real Mod+W binding is correct.
+      shortcut: getState().vimMode ? ':q' : shortcut('global.closeActiveTab'),
       when: () => !!getState().selectedPath,
       run: () => getState().closeActiveNote()
     },
