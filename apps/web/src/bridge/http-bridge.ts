@@ -86,6 +86,14 @@ import type {
   McpInstructionsPayload,
   McpServerRuntime
 } from '@shared/mcp-clients'
+import {
+  deckPathForNote,
+  isFlashcardInternalPath,
+  relocateDeckPath,
+  type FlashcardDeck,
+  type FlashcardDeckSummary
+} from '@shared/flashcards'
+import type { GenerateOptions, GenerateResult } from '@zennotes/bridge-contract/bridge'
 
 const WEB_CAPABILITIES: ZenCapabilities = {
   supportsUpdater: false,
@@ -432,50 +440,68 @@ function createExcalidraw(
   })
 }
 
-function renameNote(relPath: string, nextTitle: string): Promise<NoteMeta> {
-  return jsonRequest<NoteMeta>('/notes/rename', {
+async function renameNote(relPath: string, nextTitle: string): Promise<NoteMeta> {
+  const meta = await jsonRequest<NoteMeta>('/notes/rename', {
     method: 'POST',
     body: { path: relPath, title: nextTitle }
   })
+  await relocateFlashcardsOnWeb(relPath, meta.path)
+  return meta
 }
 
-function deleteNote(relPath: string): Promise<void> {
-  return jsonRequest<void>('/notes/delete', {
+async function deleteNote(relPath: string): Promise<void> {
+  await jsonRequest<void>('/notes/delete', {
     method: 'POST',
     body: { path: relPath }
   })
+  // Permanent delete: drop the deck so it doesn't dangle. Best-effort.
+  // Guard against recursing when the deleted path is itself a deck file.
+  if (!isFlashcardInternalPath(relPath)) {
+    await jsonRequest<void>('/notes/delete', {
+      method: 'POST',
+      body: { path: deckPathForNote(relPath) }
+    }).catch(() => {})
+  }
 }
 
-function moveToTrash(relPath: string): Promise<NoteMeta> {
-  return jsonRequest<NoteMeta>('/notes/trash', {
+async function moveToTrash(relPath: string): Promise<NoteMeta> {
+  const meta = await jsonRequest<NoteMeta>('/notes/trash', {
     method: 'POST',
     body: { path: relPath }
   })
+  await relocateFlashcardsOnWeb(relPath, meta.path)
+  return meta
 }
 
-function restoreFromTrash(relPath: string): Promise<NoteMeta> {
-  return jsonRequest<NoteMeta>('/notes/restore', {
+async function restoreFromTrash(relPath: string): Promise<NoteMeta> {
+  const meta = await jsonRequest<NoteMeta>('/notes/restore', {
     method: 'POST',
     body: { path: relPath }
   })
+  await relocateFlashcardsOnWeb(relPath, meta.path)
+  return meta
 }
 
 function emptyTrash(): Promise<void> {
   return jsonRequest<void>('/notes/empty-trash', { method: 'POST' })
 }
 
-function archiveNote(relPath: string): Promise<NoteMeta> {
-  return jsonRequest<NoteMeta>('/notes/archive', {
+async function archiveNote(relPath: string): Promise<NoteMeta> {
+  const meta = await jsonRequest<NoteMeta>('/notes/archive', {
     method: 'POST',
     body: { path: relPath }
   })
+  await relocateFlashcardsOnWeb(relPath, meta.path)
+  return meta
 }
 
-function unarchiveNote(relPath: string): Promise<NoteMeta> {
-  return jsonRequest<NoteMeta>('/notes/unarchive', {
+async function unarchiveNote(relPath: string): Promise<NoteMeta> {
+  const meta = await jsonRequest<NoteMeta>('/notes/unarchive', {
     method: 'POST',
     body: { path: relPath }
   })
+  await relocateFlashcardsOnWeb(relPath, meta.path)
+  return meta
 }
 
 function duplicateNote(relPath: string): Promise<NoteMeta> {
@@ -500,15 +526,17 @@ async function exportNotePdf(_relPath: string): Promise<string | null> {
   return null
 }
 
-function moveNote(
+async function moveNote(
   relPath: string,
   targetFolder: NoteFolder,
   targetSubpath: string
 ): Promise<NoteMeta> {
-  return jsonRequest<NoteMeta>('/notes/move', {
+  const meta = await jsonRequest<NoteMeta>('/notes/move', {
     method: 'POST',
     body: { path: relPath, targetFolder, targetSubpath }
   })
+  await relocateFlashcardsOnWeb(relPath, meta.path)
+  return meta
 }
 
 async function revealNote(_relPath: string): Promise<void> {
@@ -898,6 +926,74 @@ async function listDatabases(): Promise<DatabaseSummary[]> {
     out.push({ path: csv, title: dbTitleFromPath(csv) })
   }
   return out.sort((a, b) => a.title.localeCompare(b.title))
+}
+
+// --------------------------------------------------------------------
+// Flashcards — deck storage reuses the generic note file endpoints (same
+// trick as Databases). Generation is desktop-only in Phase 1.
+// --------------------------------------------------------------------
+
+async function readFlashcards(notePath: string): Promise<FlashcardDeck | null> {
+  const text = await readFileTextOrNull(deckPathForNote(notePath))
+  if (text == null) return null
+  try {
+    const parsed = JSON.parse(text) as FlashcardDeck
+    return parsed && Array.isArray(parsed.cards) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+async function writeFlashcards(notePath: string, deck: FlashcardDeck): Promise<FlashcardDeck> {
+  const normalized: FlashcardDeck = {
+    version: deck.version,
+    sourceNotePath: notePath.replace(/\\/g, '/').replace(/^\/+/, ''),
+    cards: deck.cards ?? []
+  }
+  await writeNote(deckPathForNote(notePath), `${JSON.stringify(normalized, null, 2)}\n`)
+  return normalized
+}
+
+/**
+ * The cross-deck index isn't built on web in Phase 1 — deck files live under
+ * the internal `.zennotes/` dir, which the public folder listing intentionally
+ * hides, and nothing consumes the list in the Phase 1 UI. Phase 2 wires a live
+ * index (desktop enumerates the dir directly).
+ */
+function listFlashcardDecks(): Promise<FlashcardDeckSummary[]> {
+  return Promise.resolve([])
+}
+
+const DESKTOP_ONLY_GENERATION = 'Flashcard generation is available on the desktop app for now.'
+
+function generateFlashcards(_notePath: string, _opts: GenerateOptions): Promise<GenerateResult> {
+  return Promise.reject(new Error(DESKTOP_ONLY_GENERATION))
+}
+
+function getAnthropicKeyPresent(): Promise<boolean> {
+  return Promise.resolve(false)
+}
+
+function setAnthropicKey(_key: string): Promise<void> {
+  return Promise.reject(new Error(DESKTOP_ONLY_GENERATION))
+}
+
+/**
+ * Best-effort: carry a note's deck file with it on rename/move/trash so it
+ * doesn't orphan. Mirrors the desktop lifecycle hooks. Never throws — a deck
+ * relocation failure must not fail the note op the user requested.
+ */
+async function relocateFlashcardsOnWeb(oldNotePath: string, newNotePath: string): Promise<void> {
+  if (oldNotePath === newNotePath) return
+  try {
+    const deck = await readFlashcards(oldNotePath)
+    if (!deck) return
+    const { from } = relocateDeckPath(oldNotePath, newNotePath)
+    await writeFlashcards(newNotePath, { ...deck, sourceNotePath: newNotePath })
+    await deleteNote(from).catch(() => {})
+  } catch {
+    // swallow — see doc comment
+  }
 }
 
 // --------------------------------------------------------------------
@@ -1456,6 +1552,12 @@ export const httpBridge: ZenBridge = {
   renameDatabase,
   createRecordPage,
   listDatabases,
+  readFlashcards,
+  writeFlashcards,
+  listFlashcardDecks,
+  generateFlashcards,
+  getAnthropicKeyPresent,
+  setAnthropicKey,
   writeNote,
   appendToNote,
   createNote,
