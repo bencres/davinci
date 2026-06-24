@@ -2852,9 +2852,11 @@ async function ensureQuickCaptureWindow(): Promise<BrowserWindow> {
   const sourceWindow = BrowserWindow.getFocusedWindow() ?? mainWindow
   const win = new BrowserWindow({
     width: 620,
-    height: 340,
+    // Tall enough to fully show the `/` slash-command menu (its list caps at
+    // 320px) without it spilling past the window edge. (#182)
+    height: 480,
     minWidth: 460,
-    minHeight: 260,
+    minHeight: 400,
     title: 'ZenNotes Quick Capture',
     show: false,
     frame: false,

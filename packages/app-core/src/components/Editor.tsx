@@ -24,7 +24,7 @@ import {
   suggestCreateNotePath,
   wikilinkHeadingAnchor
 } from '../lib/wikilinks'
-import { openWikilinkHeading } from '../lib/wikilink-navigation'
+import { openDatabaseFromWikilink, openWikilinkHeading } from '../lib/wikilink-navigation'
 import { classifyLocalAssetHref, resolveAssetVaultRelativePath } from '../lib/local-assets'
 import { externalLinkUrl, extractLinkAtCursor, resolveInternalNoteHref } from '../lib/internal-links'
 import {
@@ -546,6 +546,13 @@ function registerVimCommands(): void {
       } else {
         void state.selectNote(internal.path).then(focusEditorSoon)
       }
+      return
+    }
+
+    // Not a note — maybe a `.base` database link.
+    if (openDatabaseFromWikilink(target)) {
+      state.setFocusedPanel('editor')
+      requestAnimationFrame(() => useStore.getState().editorViewRef?.focus())
       return
     }
 
