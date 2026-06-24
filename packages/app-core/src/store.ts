@@ -33,6 +33,14 @@ import {
   isDatabaseTabPath,
   isDatabaseCsvPath
 } from '@shared/databases'
+import {
+  draftToCard,
+  emptyDeck,
+  flashcardsTabPath,
+  type FlashcardDeck,
+  type FlashcardDraft
+} from '@shared/flashcards'
+import { DEFAULT_FLASHCARD_MODEL } from '@shared/ipc'
 import { parseFrontmatter } from '@shared/template-files'
 import { recordTitle, composePageBody } from './lib/database-cells'
 import { applyManualMove, manualOrderCompare, parentDirOf } from './lib/manual-order'
@@ -1766,6 +1774,20 @@ interface Store {
   /** In-flight load flags keyed by `.csv` path. */
   databasesLoading: Record<string, boolean>
 
+  // --- Flashcards (Phase 1) ---
+  /** The note whose review tab is currently open (drives FlashcardReviewView). */
+  flashcardReviewNote: string | null
+  /** Current review batch of draft cards returned by Claude (edited in place). */
+  flashcardDraftCards: FlashcardDraft[]
+  /** Per-draft keep/discard toggles, parallel to `flashcardDraftCards`. */
+  flashcardDraftKept: boolean[]
+  /** Loaded saved decks keyed by source note path. */
+  flashcardDeckByNote: Record<string, FlashcardDeck>
+  flashcardGenStatus: 'idle' | 'generating' | 'reviewing' | 'error'
+  flashcardGenError: string | null
+  /** How many cards Claude returned that failed normalization in the last run. */
+  flashcardDropped: number
+
   /** Tags currently selected in the Tags view. The view shows every non-
    *  trash note carrying *all* (or, in `any` mode, any) of these, depending on
    *  `tagMatchMode`. Cleared when the Tags tab closes. */
@@ -1851,6 +1873,22 @@ interface Store {
   forgetDatabase: (csvPath: string) => Promise<void>
   /** Open a record as a markdown "page" note (creating + linking it on first open). */
   openRecordPage: (csvPath: string, rowId: string) => Promise<void>
+
+  // --- Flashcards (Phase 1) ---
+  /** Open the flashcard review tab for a note and kick off generation. */
+  openFlashcardReview: (notePath: string) => Promise<void>
+  /** Run Claude generation for the review note; sets status/draft state. */
+  generateFlashcardsForActiveNote: () => Promise<void>
+  /** Patch a draft card in place (marks the run as user-edited). */
+  updateDraftCard: (index: number, patch: Partial<FlashcardDraft>) => void
+  /** Toggle a draft card's keep/discard state. */
+  toggleDraftCardKept: (index: number) => void
+  /** Remove a draft card from the review batch. */
+  removeDraftCard: (index: number) => void
+  /** Promote the kept draft cards to stored cards and merge into the note's deck. */
+  saveReviewedFlashcards: (acceptedIndexes: number[]) => Promise<void>
+  /** Read a note's saved deck into `flashcardDeckByNote`. */
+  loadFlashcardDeck: (notePath: string) => Promise<void>
   /** Rename a record's linked page note to match its title (no-op if unlinked). */
   renameRecordPage: (csvPath: string, rowId: string) => Promise<void>
   /** Add or remove a tag from the Tags view selection without touching
@@ -3106,6 +3144,13 @@ export const useStore = create<Store>((set, get) => {
   tasksCalendarMonthAnchor: null,
   databases: {},
   databasesLoading: {},
+  flashcardReviewNote: null,
+  flashcardDraftCards: [],
+  flashcardDraftKept: [],
+  flashcardDeckByNote: {},
+  flashcardGenStatus: 'idle',
+  flashcardGenError: null,
+  flashcardDropped: 0,
   selectedTags: [],
   tagMatchMode: 'all',
   focusedPanel: null,
@@ -3491,6 +3536,116 @@ export const useStore = create<Store>((set, get) => {
       }
     } catch (err) {
       console.error('renameRecordPage failed', err)
+    }
+  },
+
+  openFlashcardReview: async (notePath) => {
+    set({
+      flashcardReviewNote: notePath,
+      flashcardGenStatus: 'idle',
+      flashcardGenError: null,
+      flashcardDraftCards: [],
+      flashcardDraftKept: [],
+      flashcardDropped: 0
+    })
+    await get().openNoteInPane(get().activePaneId, flashcardsTabPath(notePath))
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    set({ focusedPanel: 'editor' })
+    // Show any previously-saved deck while generation runs.
+    await get().loadFlashcardDeck(notePath)
+    await get().generateFlashcardsForActiveNote()
+  },
+
+  generateFlashcardsForActiveNote: async () => {
+    const notePath = get().flashcardReviewNote
+    if (!notePath) return
+    if (get().flashcardGenStatus === 'generating') return
+    set({ flashcardGenStatus: 'generating', flashcardGenError: null, flashcardDropped: 0 })
+    try {
+      const model = get().vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
+      const result = await window.zen.generateFlashcards(notePath, { model })
+      set({
+        flashcardDraftCards: result.drafts,
+        flashcardDraftKept: result.drafts.map(() => true),
+        flashcardDropped: result.dropped,
+        flashcardGenStatus: 'reviewing',
+        flashcardGenError: null
+      })
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err)
+      // The main process tags the missing-key case so we can show a Settings prompt.
+      const friendly = raw.includes('NO_ANTHROPIC_KEY')
+        ? 'No Anthropic API key is set. Add one in Settings to generate flashcards.'
+        : raw || 'Flashcard generation failed.'
+      set({ flashcardGenStatus: 'error', flashcardGenError: friendly })
+    }
+  },
+
+  updateDraftCard: (index, patch) => {
+    set((s) => {
+      if (index < 0 || index >= s.flashcardDraftCards.length) return {}
+      const next = s.flashcardDraftCards.slice()
+      next[index] = { ...next[index], ...patch }
+      return { flashcardDraftCards: next }
+    })
+  },
+
+  toggleDraftCardKept: (index) => {
+    set((s) => {
+      if (index < 0 || index >= s.flashcardDraftKept.length) return {}
+      const next = s.flashcardDraftKept.slice()
+      next[index] = !next[index]
+      return { flashcardDraftKept: next }
+    })
+  },
+
+  removeDraftCard: (index) => {
+    set((s) => {
+      if (index < 0 || index >= s.flashcardDraftCards.length) return {}
+      return {
+        flashcardDraftCards: s.flashcardDraftCards.filter((_, i) => i !== index),
+        flashcardDraftKept: s.flashcardDraftKept.filter((_, i) => i !== index)
+      }
+    })
+  },
+
+  saveReviewedFlashcards: async (acceptedIndexes) => {
+    const notePath = get().flashcardReviewNote
+    if (!notePath) return
+    const drafts = get().flashcardDraftCards
+    const model = get().vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
+    const accepted = acceptedIndexes
+      .filter((i) => i >= 0 && i < drafts.length)
+      .map((i) => draftToCard(drafts[i], model, { userEdited: true }))
+    if (accepted.length === 0) return
+    try {
+      const existing = get().flashcardDeckByNote[notePath] ?? (await window.zen.readFlashcards(notePath))
+      const base = existing ?? emptyDeck(notePath)
+      const merged: FlashcardDeck = { ...base, cards: [...base.cards, ...accepted] }
+      const saved = await window.zen.writeFlashcards(notePath, merged)
+      set((s) => ({
+        flashcardDeckByNote: { ...s.flashcardDeckByNote, [notePath]: saved },
+        flashcardDraftCards: [],
+        flashcardDraftKept: [],
+        flashcardGenStatus: 'idle'
+      }))
+    } catch (err) {
+      console.error('saveReviewedFlashcards failed', err)
+      set({
+        flashcardGenStatus: 'error',
+        flashcardGenError: err instanceof Error ? err.message : 'Failed to save flashcards.'
+      })
+    }
+  },
+
+  loadFlashcardDeck: async (notePath) => {
+    try {
+      const deck = await window.zen.readFlashcards(notePath)
+      if (deck) {
+        set((s) => ({ flashcardDeckByNote: { ...s.flashcardDeckByNote, [notePath]: deck } }))
+      }
+    } catch (err) {
+      console.error('loadFlashcardDeck failed', err)
     }
   },
 

@@ -5,6 +5,7 @@ import { isTagsTabPath } from '@shared/tags'
 import { isTasksTabPath } from '@shared/tasks'
 import { isTrashTabPath } from '@shared/trash'
 import { isDatabaseTabPath } from '@shared/databases'
+import { isFlashcardsTabPath } from '@shared/flashcards'
 import { isAssetsViewTabPath } from '@shared/assets-view'
 import { isAssetTabPath } from './asset-tabs'
 import { isDiagramTabPath } from './diagram-tabs'
@@ -21,7 +22,8 @@ export function isWorkspaceVirtualTabPath(path: string): boolean {
     isAssetsViewTabPath(path) ||
     isAssetTabPath(path) ||
     isDiagramTabPath(path) ||
-    isDatabaseTabPath(path)
+    isDatabaseTabPath(path) ||
+    isFlashcardsTabPath(path)
   )
 }
 

@@ -6,6 +6,7 @@ import {
   DEFAULT_WEEKLY_NOTE_TITLE_PATTERN,
   DEFAULT_WEEKLY_NOTES_DIRECTORY,
   DEFAULT_VAULT_SETTINGS,
+  DEFAULT_FLASHCARD_MODEL,
   type AssetMeta,
   type DateNotePatternSettings,
   type FolderIconId,
@@ -529,7 +530,11 @@ export function normalizeVaultSettings(
     },
     folderIcons: normalizedFolderIcons,
     folderColors: normalizedFolderColors,
-    favorites: normalizedFavorites
+    favorites: normalizedFavorites,
+    flashcardModel:
+      typeof settings?.flashcardModel === 'string' && settings.flashcardModel.trim()
+        ? settings.flashcardModel.trim()
+        : DEFAULT_FLASHCARD_MODEL
   }
 }
 

@@ -329,7 +329,11 @@ export interface VaultSettings {
    * distinguishable. Order is the display order in the Favorites section.
    */
   favorites: string[]
+  /** Anthropic model used for flashcard generation (default `claude-sonnet-4-6`). */
+  flashcardModel?: string
 }
+
+export const DEFAULT_FLASHCARD_MODEL = 'claude-sonnet-4-6'
 
 export const DEFAULT_DAILY_NOTES_DIRECTORY = 'Daily Notes'
 export const DEFAULT_DAILY_NOTE_TITLE_PATTERN = 'yyyy-MM-dd'
@@ -356,7 +360,8 @@ export const DEFAULT_VAULT_SETTINGS: VaultSettings = {
   },
   folderIcons: {},
   folderColors: {},
-  favorites: []
+  favorites: [],
+  flashcardModel: DEFAULT_FLASHCARD_MODEL
 }
 
 export interface NoteMeta {
