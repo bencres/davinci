@@ -1781,6 +1781,8 @@ interface Store {
   flashcardDraftCards: FlashcardDraft[]
   /** Per-draft keep/discard toggles, parallel to `flashcardDraftCards`. */
   flashcardDraftKept: boolean[]
+  /** Per-draft "user edited during review" flags, parallel to `flashcardDraftCards`. */
+  flashcardDraftEdited: boolean[]
   /** Loaded saved decks keyed by source note path. */
   flashcardDeckByNote: Record<string, FlashcardDeck>
   flashcardGenStatus: 'idle' | 'generating' | 'reviewing' | 'error'
@@ -3147,6 +3149,7 @@ export const useStore = create<Store>((set, get) => {
   flashcardReviewNote: null,
   flashcardDraftCards: [],
   flashcardDraftKept: [],
+  flashcardDraftEdited: [],
   flashcardDeckByNote: {},
   flashcardGenStatus: 'idle',
   flashcardGenError: null,
@@ -3546,6 +3549,7 @@ export const useStore = create<Store>((set, get) => {
       flashcardGenError: null,
       flashcardDraftCards: [],
       flashcardDraftKept: [],
+      flashcardDraftEdited: [],
       flashcardDropped: 0
     })
     await get().openNoteInPane(get().activePaneId, flashcardsTabPath(notePath))
@@ -3567,6 +3571,7 @@ export const useStore = create<Store>((set, get) => {
       set({
         flashcardDraftCards: result.drafts,
         flashcardDraftKept: result.drafts.map(() => true),
+        flashcardDraftEdited: result.drafts.map(() => false),
         flashcardDropped: result.dropped,
         flashcardGenStatus: 'reviewing',
         flashcardGenError: null
@@ -3586,7 +3591,9 @@ export const useStore = create<Store>((set, get) => {
       if (index < 0 || index >= s.flashcardDraftCards.length) return {}
       const next = s.flashcardDraftCards.slice()
       next[index] = { ...next[index], ...patch }
-      return { flashcardDraftCards: next }
+      const edited = s.flashcardDraftEdited.slice()
+      edited[index] = true
+      return { flashcardDraftCards: next, flashcardDraftEdited: edited }
     })
   },
 
@@ -3604,7 +3611,8 @@ export const useStore = create<Store>((set, get) => {
       if (index < 0 || index >= s.flashcardDraftCards.length) return {}
       return {
         flashcardDraftCards: s.flashcardDraftCards.filter((_, i) => i !== index),
-        flashcardDraftKept: s.flashcardDraftKept.filter((_, i) => i !== index)
+        flashcardDraftKept: s.flashcardDraftKept.filter((_, i) => i !== index),
+        flashcardDraftEdited: s.flashcardDraftEdited.filter((_, i) => i !== index)
       }
     })
   },
@@ -3613,10 +3621,11 @@ export const useStore = create<Store>((set, get) => {
     const notePath = get().flashcardReviewNote
     if (!notePath) return
     const drafts = get().flashcardDraftCards
+    const edited = get().flashcardDraftEdited
     const model = get().vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
     const accepted = acceptedIndexes
       .filter((i) => i >= 0 && i < drafts.length)
-      .map((i) => draftToCard(drafts[i], model, { userEdited: true }))
+      .map((i) => draftToCard(drafts[i], model, { userEdited: edited[i] ?? false }))
     if (accepted.length === 0) return
     try {
       const existing = get().flashcardDeckByNote[notePath] ?? (await window.zen.readFlashcards(notePath))
@@ -3627,6 +3636,7 @@ export const useStore = create<Store>((set, get) => {
         flashcardDeckByNote: { ...s.flashcardDeckByNote, [notePath]: saved },
         flashcardDraftCards: [],
         flashcardDraftKept: [],
+        flashcardDraftEdited: [],
         flashcardGenStatus: 'idle'
       }))
     } catch (err) {
