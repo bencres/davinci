@@ -42,6 +42,11 @@ import type {
   DbRow
 } from '@zennotes/shared-domain/databases'
 import type {
+  FlashcardDeck,
+  FlashcardDeckSummary,
+  FlashcardDraft
+} from '@zennotes/shared-domain/flashcards'
+import type {
   McpClientId,
   McpClientStatus,
   McpInstructionsPayload,
@@ -57,6 +62,19 @@ export interface ZenCapabilities {
   supportsCliInstall: boolean
   /** Custom templates require local-filesystem CRUD; false on web/remote. */
   supportsCustomTemplates: boolean
+}
+
+/** Options for a flashcard-generation request. */
+export interface GenerateOptions {
+  /** Model id; defaults to the vault's configured model (`claude-sonnet-4-6`). */
+  model?: string
+}
+
+/** Result of a flashcard-generation request: validated drafts + drop count. */
+export interface GenerateResult {
+  drafts: FlashcardDraft[]
+  /** How many cards Claude returned that failed `normalizeDraft` and were dropped. */
+  dropped: number
 }
 
 export interface ZenAppInfo {
@@ -148,6 +166,21 @@ export interface ZenBridge {
   /** Create a record's "page" note (returns its vault-relative path). */
   createRecordPage(csvPath: string, title: string, body: string): Promise<string>
   listDatabases(): Promise<DatabaseSummary[]>
+
+  // --- Flashcards (Phase 1) ---
+  /** The saved deck for a note, or null when none exists yet. */
+  readFlashcards(notePath: string): Promise<FlashcardDeck | null>
+  /** Persist a deck for a note (creating `.zennotes/flashcards/…` as needed). */
+  writeFlashcards(notePath: string, deck: FlashcardDeck): Promise<FlashcardDeck>
+  /** Enumerate all decks (path + card count) for the cross-deck index. */
+  listFlashcardDecks(): Promise<FlashcardDeckSummary[]>
+  /** Generate draft cards from a note via Claude. Desktop-only in Phase 1. */
+  generateFlashcards(notePath: string, opts: GenerateOptions): Promise<GenerateResult>
+  /** Whether an Anthropic API key is stored (never returns the key itself). */
+  getAnthropicKeyPresent(): Promise<boolean>
+  /** Store (or clear, when empty) the Anthropic API key in the OS secret store. */
+  setAnthropicKey(key: string): Promise<void>
+
   writeNote(relPath: string, body: string): Promise<NoteMeta>
   appendToNote(relPath: string, body: string, position: 'start' | 'end'): Promise<NoteMeta>
   createNote(folder: NoteFolder, title?: string, subpath?: string): Promise<NoteMeta>
