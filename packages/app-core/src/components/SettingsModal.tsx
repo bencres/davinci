@@ -6,7 +6,8 @@ import {
   DEFAULT_DAILY_NOTES_DIRECTORY,
   DEFAULT_WEEKLY_NOTE_LOCALE,
   DEFAULT_WEEKLY_NOTE_TITLE_PATTERN,
-  DEFAULT_WEEKLY_NOTES_DIRECTORY
+  DEFAULT_WEEKLY_NOTES_DIRECTORY,
+  DEFAULT_FLASHCARD_MODEL
 } from '@shared/ipc'
 import type {
   AppUpdateState,
@@ -70,6 +71,7 @@ import { Button } from './ui/Button'
 type SettingsCategoryId =
   | 'appearance'
   | 'editor'
+  | 'ai'
   | 'keymaps'
   | 'typography'
   | 'vault'
@@ -645,6 +647,49 @@ export function SettingsModal(): JSX.Element {
   const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>('appearance')
   const [activeSearchResultId, setActiveSearchResultId] = useState<string | null>(null)
   const [navQuery, setNavQuery] = useState('')
+  // AI / Flashcards — Anthropic key (lives only in the OS secret store).
+  const [anthropicKeyPresent, setAnthropicKeyPresent] = useState(false)
+  const [anthropicKeyInput, setAnthropicKeyInput] = useState('')
+  const [anthropicKeyBusy, setAnthropicKeyBusy] = useState(false)
+  useEffect(() => {
+    if (typeof window.zen?.getAnthropicKeyPresent !== 'function') return
+    let cancelled = false
+    void window.zen
+      .getAnthropicKeyPresent()
+      .then((present) => {
+        if (!cancelled) setAnthropicKeyPresent(present)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const saveAnthropicKey = useCallback(async () => {
+    const key = anthropicKeyInput.trim()
+    if (!key) return
+    setAnthropicKeyBusy(true)
+    try {
+      await window.zen.setAnthropicKey(key)
+      setAnthropicKeyInput('')
+      setAnthropicKeyPresent(true)
+    } catch (err) {
+      console.error('setAnthropicKey failed', err)
+    } finally {
+      setAnthropicKeyBusy(false)
+    }
+  }, [anthropicKeyInput])
+  const clearAnthropicKey = useCallback(async () => {
+    setAnthropicKeyBusy(true)
+    try {
+      await window.zen.setAnthropicKey('')
+      setAnthropicKeyInput('')
+      setAnthropicKeyPresent(false)
+    } catch (err) {
+      console.error('clearAnthropicKey failed', err)
+    } finally {
+      setAnthropicKeyBusy(false)
+    }
+  }, [])
   const availableVaultTextSearchTools = [
     vaultTextSearchCapabilities?.ripgrep ? 'ripgrep' : null,
     vaultTextSearchCapabilities?.fzf ? 'fzf' : null
@@ -1406,6 +1451,105 @@ export function SettingsModal(): JSX.Element {
                 onChange={(next) => setLineNumberPosition(next)}
               />
             )}
+          </Section>
+        </div>
+      )
+    },
+    {
+      id: 'ai',
+      title: 'AI / Flashcards',
+      description: 'Connect an Anthropic API key and choose the model used to generate flashcards.',
+      keywords: ['anthropic', 'claude', 'api key', 'flashcard', 'model', 'ai', 'byok', 'generate'],
+      searchItems: [
+        {
+          id: 'anthropic-api-key',
+          title: 'Anthropic API key',
+          description: 'Bring-your-own-key, stored securely in your OS keychain.',
+          keywords: ['anthropic', 'api key', 'claude', 'byok', 'secret']
+        },
+        {
+          id: 'flashcard-model',
+          title: 'Flashcard model',
+          description: 'Which Claude model generates your flashcards.',
+          keywords: ['model', 'sonnet', 'opus', 'claude']
+        }
+      ],
+      content: (
+        <div className="space-y-6">
+          <Section
+            title="Anthropic API key"
+            description="Flashcard generation calls Claude with your own key. The key is stored in your OS keychain on this device and never written to the vault or synced."
+          >
+            <div className="space-y-4 px-5 py-5" {...settingsSearchTargetProps('anthropic-api-key')}>
+              <div className="flex items-center gap-2 text-sm">
+                <span
+                  className={[
+                    'inline-flex h-2.5 w-2.5 rounded-full',
+                    anthropicKeyPresent ? 'bg-emerald-500' : 'bg-ink-300'
+                  ].join(' ')}
+                  aria-hidden="true"
+                />
+                <span className="text-ink-700">
+                  {anthropicKeyPresent ? 'A key is saved on this device.' : 'No key saved yet.'}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="password"
+                  value={anthropicKeyInput}
+                  onChange={(e) => setAnthropicKeyInput(e.target.value)}
+                  placeholder={anthropicKeyPresent ? 'Enter a new key to replace…' : 'sk-ant-…'}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="min-w-0 flex-1 rounded-xl border border-paper-300/70 bg-paper-50/75 px-3 py-2.5 text-sm text-ink-900 outline-none placeholder:text-ink-400 focus:border-accent/45"
+                />
+                <button
+                  type="button"
+                  onClick={() => void saveAnthropicKey()}
+                  disabled={anthropicKeyBusy || !anthropicKeyInput.trim()}
+                  className={[
+                    'shrink-0 rounded-xl border px-3.5 py-2 text-xs font-medium transition-colors',
+                    anthropicKeyBusy || !anthropicKeyInput.trim()
+                      ? 'cursor-default border-paper-300/50 bg-paper-100/50 text-ink-400'
+                      : 'border-paper-300/70 bg-paper-100/80 text-ink-800 hover:bg-paper-200'
+                  ].join(' ')}
+                >
+                  Save key
+                </button>
+                {anthropicKeyPresent && (
+                  <button
+                    type="button"
+                    onClick={() => void clearAnthropicKey()}
+                    disabled={anthropicKeyBusy}
+                    className="shrink-0 rounded-xl border border-paper-300/70 bg-paper-100/80 px-3.5 py-2 text-xs font-medium text-ink-800 transition-colors hover:bg-paper-200"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <div className="text-xs leading-5 text-ink-500">
+                Get a key from console.anthropic.com. Generation runs on the desktop app only for now.
+              </div>
+            </div>
+          </Section>
+
+          <Section
+            title="Flashcard model"
+            description="The Claude model used to generate cards. Sonnet is faster and cheaper; Opus is the most capable."
+          >
+            <SegmentedRow
+              label="Generation model"
+              description="Applies to new flashcard generations."
+              value={vaultSettings.flashcardModel ?? DEFAULT_FLASHCARD_MODEL}
+              settingId="flashcard-model"
+              options={[
+                { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+                { value: 'claude-opus-4-8', label: 'Opus 4.8' }
+              ]}
+              onChange={(flashcardModel) =>
+                void persistVaultSettings({ ...vaultSettings, flashcardModel })
+              }
+            />
           </Section>
         </div>
       )

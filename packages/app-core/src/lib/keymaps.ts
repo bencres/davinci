@@ -53,6 +53,7 @@ export type KeymapId =
   | "vim.leaderDailyNote"
   | "vim.leaderWeeklyNote"
   | "vim.leaderCalendar"
+  | "vim.leaderGenerateFlashcards"
   | "vim.panePrefix"
   | "vim.paneFocusLeft"
   | "vim.paneFocusDown"
@@ -90,7 +91,14 @@ export type KeymapId =
   | "nav.toggleTask"
   | "nav.localEx"
   | "nav.newQuickNote"
-  | "nav.unarchive";
+  | "nav.unarchive"
+  | "flashcards.reviewNext"
+  | "flashcards.reviewPrev"
+  | "flashcards.reviewToggleKeep"
+  | "flashcards.reviewEdit"
+  | "flashcards.reviewDiscard"
+  | "flashcards.reviewRegenerate"
+  | "flashcards.reviewSave";
 
 export type KeymapOverrides = Partial<Record<KeymapId, string>>;
 
@@ -542,6 +550,17 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     maxTokens: 1,
   },
   {
+    id: "vim.leaderGenerateFlashcards",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Leader: generate flashcards",
+    description: "Generate spaced-repetition flashcards from the active note.",
+    defaultBinding: "g",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
     id: "vim.panePrefix",
     kind: "sequence",
     scope: "pane",
@@ -943,6 +962,75 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     description: "Move the selected archived note back to Inbox.",
     defaultBinding: "u",
     maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewNext",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Flashcard review: next card",
+    description: "Focus the next draft card in the flashcard review.",
+    defaultBinding: "j",
+    maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewPrev",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Flashcard review: previous card",
+    description: "Focus the previous draft card in the flashcard review.",
+    defaultBinding: "k",
+    maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewToggleKeep",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Flashcard review: keep/discard card",
+    description: "Toggle whether the focused draft card will be saved.",
+    defaultBinding: "x",
+    maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewEdit",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Flashcard review: edit card",
+    description: "Edit the focused draft card's fields.",
+    defaultBinding: "e",
+    maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewDiscard",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Flashcard review: remove card",
+    description: "Remove the focused draft card from the review batch.",
+    defaultBinding: "d",
+    maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewRegenerate",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Flashcard review: regenerate",
+    description: "Re-run Claude generation for this note.",
+    defaultBinding: "r",
+    maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewSave",
+    kind: "shortcut",
+    scope: "views",
+    group: "view-actions",
+    title: "Flashcard review: save kept cards",
+    description: "Save the kept draft cards to the note's deck.",
+    defaultBinding: "Mod+S",
   },
 ];
 

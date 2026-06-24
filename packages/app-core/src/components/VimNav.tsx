@@ -255,6 +255,11 @@ export function VimNav(): JSX.Element | null {
         keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderCalendar'),
         label: 'Toggle calendar',
         detail: 'Show or hide the calendar for the active daily/weekly note.'
+      },
+      {
+        keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderGenerateFlashcards'),
+        label: 'Generate flashcards',
+        detail: 'Generate spaced-repetition flashcards from the active note.'
       }
     ]
     if (whichKeyState.allowEditorActions) {
@@ -732,6 +737,14 @@ export function VimNav(): JSX.Element | null {
           e.stopImmediatePropagation()
           resetLeader()
           window.dispatchEvent(new Event('zen:toggle-calendar'))
+          return
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderGenerateFlashcards')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          const active = state.activeNote
+          if (active) void state.openFlashcardReview(active.path)
           return
         }
         // Any other key cancels leader and falls through to normal routing.

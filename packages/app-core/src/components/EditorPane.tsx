@@ -99,6 +99,7 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { promptApp } from '../lib/prompt-requests'
 import { TasksView } from './TasksView'
 import { DatabaseView } from './DatabaseView'
+import { FlashcardReviewView } from './FlashcardReviewView'
 import { LazyExcalidrawView } from './LazyExcalidrawView'
 import { isExcalidrawPath } from '@shared/excalidraw'
 import { TagView } from './TagView'
@@ -109,6 +110,7 @@ import { AssetsView } from './AssetsView'
 import { QuickNotesView } from './QuickNotesView'
 import { isTasksTabPath } from '@shared/tasks'
 import { isDatabaseTabPath, databaseTitleFromTab, databaseTabPath, isDatabaseCsvPath } from '@shared/databases'
+import { isFlashcardsTabPath, flashcardsTitleFromTab } from '@shared/flashcards'
 import { isTagsTabPath } from '@shared/tags'
 import { isHelpTabPath } from '@shared/help'
 import { isArchiveTabPath } from '@shared/archive'
@@ -2282,7 +2284,8 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
           isAssetsView: false,
           isAsset: false,
           isDiagram: false,
-          isDatabase: false
+          isDatabase: false,
+          isFlashcards: false
         }
         if (isTasksTabPath(path)) {
           return {
@@ -2353,6 +2356,13 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             ...base,
             title: databaseTitleFromTab(path),
             isDatabase: true
+          }
+        }
+        if (isFlashcardsTabPath(path)) {
+          return {
+            ...base,
+            title: `Flashcards · ${flashcardsTitleFromTab(path)}`,
+            isFlashcards: true
           }
         }
         const meta = path === content?.path ? content : notes.find((n) => n.path === path)
@@ -2431,7 +2441,8 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
       isTrashTabPath(path) ||
       isAssetTabPath(path) ||
       isDiagramTabPath(path) ||
-      isDatabaseTabPath(path)
+      isDatabaseTabPath(path) ||
+      isFlashcardsTabPath(path)
     ) {
       return [
         { label: 'Close', onSelect: async () => closeTabInPane(paneId, path) },
@@ -3242,6 +3253,8 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             <LazyDiagramTabView diagram={diagramFromTabPath(activeTab)} />
           ) : activeTab && isDatabaseTabPath(activeTab) ? (
             <DatabaseView tabPath={activeTab} isActive={isActive} />
+          ) : activeTab && isFlashcardsTabPath(activeTab) ? (
+            <FlashcardReviewView tabPath={activeTab} isActive={isActive} />
           ) : activeTab && isExcalidrawPath(activeTab) ? (
             <LazyExcalidrawView path={activeTab} />
           ) : content ? (

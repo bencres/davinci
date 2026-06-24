@@ -189,6 +189,19 @@ export function buildCommands(options?: { includeUnavailable?: boolean }): Comma
       run: () => getState().saveActiveNoteAsTemplate()
     },
     {
+      id: 'flashcards.generate',
+      title: 'Generate Flashcards from This Note',
+      category: 'Note',
+      keywords: 'flashcard study learn anki srs quiz recall spaced repetition',
+      shortcut: leaderShortcut('vim.leaderGenerateFlashcards'),
+      when: () => !!getState().activeNote,
+      run: async () => {
+        const s = getState()
+        if (!s.activeNote) return
+        await s.openFlashcardReview(s.activeNote.path)
+      }
+    },
+    {
       id: 'note.new.here',
       title: 'New Note in Current Folder',
       category: 'Note',
