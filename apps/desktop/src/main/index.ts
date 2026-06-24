@@ -104,7 +104,9 @@ import type { WriteTemplateInput } from '@zennotes/bridge-contract/templates'
 import {
   deleteRemoteWorkspaceSecret,
   getRemoteWorkspaceSecret,
-  setRemoteWorkspaceSecret
+  setRemoteWorkspaceSecret,
+  getAnthropicApiKey,
+  setAnthropicApiKey
 } from './secret-store'
 import { scanAllTasks, scanTasksForPath } from './tasks'
 import {
@@ -117,6 +119,16 @@ import {
   listDatabases
 } from './databases'
 import type { DatabaseSidecar, DbRow } from '@shared/databases'
+import {
+  readFlashcards,
+  writeFlashcards,
+  listFlashcardDecks,
+  relocateFlashcards,
+  deleteFlashcards,
+  generateFlashcards,
+  MissingAnthropicKeyError
+} from './flashcards'
+import type { FlashcardDeck } from '@shared/flashcards'
 import { VaultWatcher } from './watcher'
 import { WindowVaultRegistry } from './window-vaults'
 import { renderTikz } from './tikz'
@@ -1727,6 +1739,23 @@ function isRemoteWorkspaceActive(): boolean {
   return remoteWorkspaceClient != null && (win ? true : currentWorkspaceMode === 'remote')
 }
 
+/**
+ * Move a note's flashcard deck alongside the note after a rename/move/trash/
+ * archive op, so decks never orphan. Best-effort: a deck-relocation failure is
+ * logged but never fails the note op the user actually requested.
+ */
+async function relocateDeckSafely(
+  root: string,
+  oldPath: string,
+  newPath: string
+): Promise<void> {
+  try {
+    await relocateFlashcards(root, oldPath, newPath)
+  } catch (err) {
+    console.error('relocateFlashcards failed', err)
+  }
+}
+
 function requireRemoteWorkspaceClient(): RemoteServerClient {
   if (!isRemoteWorkspaceActive() || !remoteWorkspaceClient) {
     throw new Error('No remote workspace is connected')
@@ -2253,6 +2282,51 @@ function registerIpc(): void {
     return await listDatabases(requireVault().root)
   })
 
+  // Flashcards — deck storage works on any local vault; generation is desktop-only.
+  const ensureLocalForFlashcards = (): void => {
+    if (isRemoteWorkspaceActive()) {
+      throw new Error('Flashcards are not yet supported on remote vaults')
+    }
+  }
+
+  handle(IPC.VAULT_READ_FLASHCARDS, async (_e, notePath: string) => {
+    ensureLocalForFlashcards()
+    return await readFlashcards(requireVault().root, notePath)
+  })
+
+  handle(IPC.VAULT_WRITE_FLASHCARDS, async (_e, notePath: string, deck: FlashcardDeck) => {
+    ensureLocalForFlashcards()
+    return await writeFlashcards(requireVault().root, notePath, deck)
+  })
+
+  handle(IPC.VAULT_LIST_FLASHCARDS, async () => {
+    ensureLocalForFlashcards()
+    return await listFlashcardDecks(requireVault().root)
+  })
+
+  handle(IPC.AI_GENERATE_FLASHCARDS, async (_e, notePath: string, opts: { model?: string }) => {
+    ensureLocalForFlashcards()
+    try {
+      return await generateFlashcards(requireVault().root, notePath, opts ?? {})
+    } catch (err) {
+      // Surface the missing-key case as a typed message the renderer maps to a
+      // "Set your key in Settings" affordance.
+      if (err instanceof MissingAnthropicKeyError) {
+        throw new Error(`NO_ANTHROPIC_KEY: ${err.message}`)
+      }
+      throw err
+    }
+  })
+
+  handle(IPC.AI_GET_ANTHROPIC_KEY_PRESENT, async () => {
+    const key = await getAnthropicApiKey()
+    return Boolean(key)
+  })
+
+  handle(IPC.AI_SET_ANTHROPIC_KEY, async (_e, key: string) => {
+    await setAnthropicApiKey(key)
+  })
+
   handle(IPC.VAULT_WRITE_NOTE, async (_e, relPath: string, body: string) => {
     if (isRemoteWorkspaceActive()) {
       return await requireRemoteWorkspaceClient().writeNote(relPath, body)
@@ -2310,7 +2384,9 @@ function registerIpc(): void {
       return await requireRemoteWorkspaceClient().renameNote(relPath, nextTitle)
     }
     const v = requireVault()
-    return await renameNote(v.root, relPath, nextTitle)
+    const meta = await renameNote(v.root, relPath, nextTitle)
+    await relocateDeckSafely(v.root, relPath, meta.path)
+    return meta
   })
 
   handle(IPC.VAULT_DELETE_NOTE, async (_e, relPath: string) => {
@@ -2320,6 +2396,10 @@ function registerIpc(): void {
     }
     const v = requireVault()
     await deleteNote(v.root, relPath)
+    // Permanent delete: drop the deck too so it doesn't dangle.
+    await deleteFlashcards(v.root, relPath).catch((err) =>
+      console.error('deleteFlashcards failed', err)
+    )
   })
 
   handle(IPC.VAULT_MOVE_TO_TRASH, async (_e, relPath: string) => {
@@ -2327,7 +2407,9 @@ function registerIpc(): void {
       return await requireRemoteWorkspaceClient().moveToTrash(relPath)
     }
     const v = requireVault()
-    return await moveToTrash(v.root, relPath)
+    const meta = await moveToTrash(v.root, relPath)
+    await relocateDeckSafely(v.root, relPath, meta.path)
+    return meta
   })
 
   handle(IPC.VAULT_RESTORE_FROM_TRASH, async (_e, relPath: string) => {
@@ -2335,7 +2417,9 @@ function registerIpc(): void {
       return await requireRemoteWorkspaceClient().restoreFromTrash(relPath)
     }
     const v = requireVault()
-    return await restoreFromTrash(v.root, relPath)
+    const meta = await restoreFromTrash(v.root, relPath)
+    await relocateDeckSafely(v.root, relPath, meta.path)
+    return meta
   })
 
   handle(IPC.VAULT_EMPTY_TRASH, async () => {
@@ -2352,7 +2436,9 @@ function registerIpc(): void {
       return await requireRemoteWorkspaceClient().archiveNote(relPath)
     }
     const v = requireVault()
-    return await archiveNote(v.root, relPath)
+    const meta = await archiveNote(v.root, relPath)
+    await relocateDeckSafely(v.root, relPath, meta.path)
+    return meta
   })
 
   handle(IPC.VAULT_UNARCHIVE_NOTE, async (_e, relPath: string) => {
@@ -2360,7 +2446,9 @@ function registerIpc(): void {
       return await requireRemoteWorkspaceClient().unarchiveNote(relPath)
     }
     const v = requireVault()
-    return await unarchiveNote(v.root, relPath)
+    const meta = await unarchiveNote(v.root, relPath)
+    await relocateDeckSafely(v.root, relPath, meta.path)
+    return meta
   })
 
   handle(IPC.VAULT_DUPLICATE_NOTE, async (_e, relPath: string) => {
@@ -2406,7 +2494,9 @@ function registerIpc(): void {
         return await requireRemoteWorkspaceClient().moveNote(relPath, targetFolder, targetSubpath)
       }
       const v = requireVault()
-      return await moveNote(v.root, relPath, targetFolder, targetSubpath)
+      const meta = await moveNote(v.root, relPath, targetFolder, targetSubpath)
+      await relocateDeckSafely(v.root, relPath, meta.path)
+      return meta
     }
   )
 

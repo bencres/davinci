@@ -4,7 +4,9 @@ import appPackage from '../../package.json'
 import type {
   ZenAppInfo,
   ZenBridge,
-  ZenCapabilities
+  ZenCapabilities,
+  GenerateOptions,
+  GenerateResult
 } from '@zennotes/bridge-contract/bridge'
 import type {
   CustomTemplateFile,
@@ -47,6 +49,7 @@ import type {
 } from '@shared/ipc'
 import type { VaultTask } from '@shared/tasks'
 import type { DatabaseDoc, DatabaseSidecar, DatabaseSummary, DbRow } from '@shared/databases'
+import type { FlashcardDeck, FlashcardDeckSummary } from '@shared/flashcards'
 import type {
   McpClientId,
   McpClientStatus,
@@ -318,6 +321,18 @@ const api: ZenBridge = {
   createRecordPage: (csvPath: string, title: string, body: string): Promise<string> =>
     ipcRenderer.invoke(IPC.VAULT_CREATE_RECORD_PAGE, csvPath, title, body),
   listDatabases: (): Promise<DatabaseSummary[]> => ipcRenderer.invoke(IPC.VAULT_LIST_DATABASES),
+  readFlashcards: (notePath: string): Promise<FlashcardDeck | null> =>
+    ipcRenderer.invoke(IPC.VAULT_READ_FLASHCARDS, notePath),
+  writeFlashcards: (notePath: string, deck: FlashcardDeck): Promise<FlashcardDeck> =>
+    ipcRenderer.invoke(IPC.VAULT_WRITE_FLASHCARDS, notePath, deck),
+  listFlashcardDecks: (): Promise<FlashcardDeckSummary[]> =>
+    ipcRenderer.invoke(IPC.VAULT_LIST_FLASHCARDS),
+  generateFlashcards: (notePath: string, opts: GenerateOptions): Promise<GenerateResult> =>
+    ipcRenderer.invoke(IPC.AI_GENERATE_FLASHCARDS, notePath, opts),
+  getAnthropicKeyPresent: (): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.AI_GET_ANTHROPIC_KEY_PRESENT),
+  setAnthropicKey: (key: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.AI_SET_ANTHROPIC_KEY, key),
   writeNote: (relPath: string, body: string): Promise<NoteMeta> =>
     ipcRenderer.invoke(IPC.VAULT_WRITE_NOTE, relPath, body),
   appendToNote: (relPath: string, body: string, position: 'start' | 'end'): Promise<NoteMeta> =>

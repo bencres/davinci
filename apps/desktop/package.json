@@ -37,6 +37,7 @@
     "dist:linux": "npm run build:prod && electron-builder --linux --publish never"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.106.0",
     "@codemirror/autocomplete": "^6.18.3",
     "@codemirror/commands": "^6.7.1",
     "@codemirror/lang-markdown": "^6.3.1",
