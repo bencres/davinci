@@ -49,7 +49,13 @@ import type {
 } from '@shared/ipc'
 import type { VaultTask } from '@shared/tasks'
 import type { DatabaseDoc, DatabaseSidecar, DatabaseSummary, DbRow } from '@shared/databases'
-import type { FlashcardDeck, FlashcardDeckSummary } from '@shared/flashcards'
+import type {
+  FlashcardDeck,
+  FlashcardDeckSummary,
+  ReviewGrade,
+  ReviewLogFile
+} from '@shared/flashcards'
+import type { StudyGamification } from '@shared/study-stats'
 import type {
   McpClientId,
   McpClientStatus,
@@ -327,6 +333,14 @@ const api: ZenBridge = {
     ipcRenderer.invoke(IPC.VAULT_WRITE_FLASHCARDS, notePath, deck),
   listFlashcardDecks: (): Promise<FlashcardDeckSummary[]> =>
     ipcRenderer.invoke(IPC.VAULT_LIST_FLASHCARDS),
+  readReviewLog: (notePath: string): Promise<ReviewLogFile | null> =>
+    ipcRenderer.invoke(IPC.VAULT_READ_REVIEW_LOG, notePath),
+  appendReviewGrade: (notePath: string, grade: ReviewGrade): Promise<ReviewLogFile> =>
+    ipcRenderer.invoke(IPC.VAULT_APPEND_REVIEW_GRADE, notePath, grade),
+  readStudyGamification: (): Promise<StudyGamification> =>
+    ipcRenderer.invoke(IPC.VAULT_READ_STUDY_GAMIFICATION),
+  writeStudyGamification: (gamification: StudyGamification): Promise<StudyGamification> =>
+    ipcRenderer.invoke(IPC.VAULT_WRITE_STUDY_GAMIFICATION, gamification),
   generateFlashcards: (notePath: string, opts: GenerateOptions): Promise<GenerateResult> =>
     ipcRenderer.invoke(IPC.AI_GENERATE_FLASHCARDS, notePath, opts),
   getAnthropicKeyPresent: (): Promise<boolean> =>

@@ -198,6 +198,15 @@ export interface ReviewGrade {
   score?: number // 0..1, weighted by criterion weight
 }
 
+export const REVIEW_LOG_VERSION = 1
+
+/** Append-only per-note review history, stored beside the deck (see `logPathForNote`). */
+export interface ReviewLogFile {
+  version: typeof REVIEW_LOG_VERSION
+  sourceNotePath: string // vault-relative POSIX path of the note
+  grades: ReviewGrade[]
+}
+
 // ---------------------------------------------------------------------------
 // Injectable id factory (main passes node's randomUUID; tests pass a counter).
 // ---------------------------------------------------------------------------
@@ -243,6 +252,28 @@ export function relocateDeckPath(
   return { from: deckPathForNote(oldNotePath), to: deckPathForNote(newNotePath) }
 }
 
+/** Suffix appended to a note path to form its review-log file path. */
+export const LOG_FILE_SUFFIX = '.cards.log.json'
+
+/** The review-log file path for a note. e.g. `a/Note.md` → `.zennotes/flashcards/a/Note.md.cards.log.json`. */
+export function logPathForNote(notePath: string): string {
+  return `${FLASHCARDS_DIR}/${toPosixPath(notePath)}${LOG_FILE_SUFFIX}`
+}
+
+/** True for review-log files inside the internal flashcards dir (hidden from the note list). */
+export function isFlashcardLogPath(relPath: string): boolean {
+  const p = toPosixPath(relPath)
+  return p.startsWith(`${FLASHCARDS_DIR}/`) && p.endsWith(LOG_FILE_SUFFIX)
+}
+
+/** The `{ from, to }` review-log paths for a note rename/move (for the lifecycle hook). */
+export function relocateLogPath(
+  oldNotePath: string,
+  newNotePath: string
+): { from: string; to: string } {
+  return { from: logPathForNote(oldNotePath), to: logPathForNote(newNotePath) }
+}
+
 // ---------------------------------------------------------------------------
 // Virtual tab-path helpers (mirror databases.ts). A review opens as a virtual
 // tab keyed by the note path, so it never hits the markdown pipeline but the
@@ -276,6 +307,62 @@ export function flashcardsTitleFromTab(path: string | null | undefined): string 
   if (!note) return 'Flashcards'
   const base = note.split('/').filter(Boolean).pop() ?? note
   return base.replace(/\.md$/i, '')
+}
+
+// ---------------------------------------------------------------------------
+// Study-session tab paths. The global review queue (`zen://study`) mirrors the
+// vault-wide Tasks tab; a per-note session (`zen://study/<encoded notePath>`)
+// mirrors the flashcards-review tab. Both are virtual tabs (never hit the
+// markdown pipeline) rendered by EditorPane.
+// ---------------------------------------------------------------------------
+
+/** Virtual tab path for the vault-wide "study all due cards" queue. */
+export const STUDY_TAB_PATH = 'zen://study'
+const STUDY_TAB_PREFIX = 'zen://study/'
+
+/** Virtual tab path for studying a single note's deck. */
+export function studyTabPath(notePath: string): string {
+  return `${STUDY_TAB_PREFIX}${encodeURIComponent(toPosixPath(notePath))}`
+}
+
+/** True for both the global study tab and any per-note study tab. */
+export function isStudyTabPath(path: string | null | undefined): boolean {
+  return typeof path === 'string' && (path === STUDY_TAB_PATH || path.startsWith(STUDY_TAB_PREFIX))
+}
+
+/** The source note path for a per-note study tab, or null for the global queue. */
+export function notePathFromStudyTab(path: string | null | undefined): string | null {
+  if (!path || !path.startsWith(STUDY_TAB_PREFIX)) return null
+  const encoded = path.slice(STUDY_TAB_PREFIX.length)
+  if (!encoded) return null
+  try {
+    return decodeURIComponent(encoded)
+  } catch {
+    return encoded
+  }
+}
+
+/** Display title for a study tab (note basename, or "Study" for the global queue). */
+export function studyTitleFromTab(path: string | null | undefined): string {
+  const note = notePathFromStudyTab(path)
+  if (!note) return 'Study'
+  const base = note.split('/').filter(Boolean).pop() ?? note
+  return `Study · ${base.replace(/\.md$/i, '')}`
+}
+
+// ---------------------------------------------------------------------------
+// Study dashboard tab. A single vault-wide virtual tab (like the global study
+// queue and the Tasks tab) that renders the gamified study hub: streak,
+// daily-goal ring, activity heatmap, per-concept mastery, and start-studying
+// entry points.
+// ---------------------------------------------------------------------------
+
+/** Virtual tab path for the vault-wide study dashboard. */
+export const STUDY_DASHBOARD_TAB_PATH = 'zen://dashboard'
+
+/** True for the study dashboard tab. */
+export function isStudyDashboardTabPath(path: string | null | undefined): boolean {
+  return path === STUDY_DASHBOARD_TAB_PATH
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +515,66 @@ export function draftToCard(
 
 export function emptyDeck(notePath: string): FlashcardDeck {
   return { version: FLASHCARD_STORE_VERSION, sourceNotePath: toPosixPath(notePath), cards: [] }
+}
+
+/** A fresh, empty review-log file for a note. */
+export function emptyReviewLog(notePath: string): ReviewLogFile {
+  return { version: REVIEW_LOG_VERSION, sourceNotePath: toPosixPath(notePath), grades: [] }
+}
+
+/** Append a grade to a (possibly null) review log, returning a new log file. */
+export function appendReviewGrade(
+  log: ReviewLogFile | null,
+  notePath: string,
+  grade: ReviewGrade
+): ReviewLogFile {
+  const base = log ?? emptyReviewLog(notePath)
+  return { ...base, grades: [...base.grades, grade] }
+}
+
+/** True when an ISO timestamp falls on the same local calendar day as `now`. */
+function isSameLocalDay(iso: string, now: Date): boolean {
+  const t = new Date(iso)
+  return (
+    t.getFullYear() === now.getFullYear() &&
+    t.getMonth() === now.getMonth() &&
+    t.getDate() === now.getDate()
+  )
+}
+
+/** Count grades whose `reviewedAt` falls on the same local calendar day as `now`. */
+export function countReviewsOnDay(grades: ReviewGrade[], now: Date = new Date()): number {
+  let count = 0
+  for (const g of grades) if (isSameLocalDay(g.reviewedAt, now)) count++
+  return count
+}
+
+/**
+ * Daily-limit accounting from review logs: how many NEW cards were introduced
+ * today (a card whose earliest-ever grade is today) vs. how many other reviews
+ * happened today. Drives the per-day new/review caps in the study queue.
+ */
+export function countDailyProgress(
+  logs: ReviewLogFile[],
+  now: Date = new Date()
+): { newDoneToday: number; reviewsDoneToday: number } {
+  const earliestByCard = new Map<string, number>()
+  let totalToday = 0
+  for (const log of logs) {
+    for (const g of log.grades) {
+      const t = Date.parse(g.reviewedAt)
+      const prev = earliestByCard.get(g.cardId)
+      if (prev == null || (Number.isFinite(t) && t < prev)) earliestByCard.set(g.cardId, t)
+      if (isSameLocalDay(g.reviewedAt, now)) totalToday++
+    }
+  }
+  let newDoneToday = 0
+  for (const earliest of earliestByCard.values()) {
+    if (Number.isFinite(earliest) && isSameLocalDay(new Date(earliest).toISOString(), now)) {
+      newDoneToday++
+    }
+  }
+  return { newDoneToday, reviewsDoneToday: Math.max(0, totalToday - newDoneToday) }
 }
 
 /** Cross-deck index: cardId → its card + the note it came from (used in Phase 2). */

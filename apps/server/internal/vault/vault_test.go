@@ -999,3 +999,56 @@ func TestRenameAndMovePreserveExcalidrawExt(t *testing.T) {
 		t.Errorf("move dropped the extension: %q", moved.Path)
 	}
 }
+
+func TestListFlashcardDecks(t *testing.T) {
+	root := t.TempDir()
+	v, err := New(root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deckDir := filepath.Join(root, ".zennotes", "flashcards", "inbox")
+	if err := os.MkdirAll(deckDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A deck with two cards, plus a review-log sidecar that must NOT be listed.
+	if err := os.WriteFile(filepath.Join(deckDir, "Topic.md.cards.json"),
+		[]byte(`{"version":1,"sourceNotePath":"inbox/Topic.md","cards":[{"id":"a"},{"id":"b"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deckDir, "Topic.md.cards.log.json"),
+		[]byte(`{"version":1,"sourceNotePath":"inbox/Topic.md","grades":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	decks, err := v.ListFlashcardDecks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decks) != 1 {
+		t.Fatalf("expected exactly one deck (log sidecar excluded), got %d: %+v", len(decks), decks)
+	}
+	got := decks[0]
+	if got.SourceNotePath != "inbox/Topic.md" {
+		t.Errorf("sourceNotePath = %q, want inbox/Topic.md", got.SourceNotePath)
+	}
+	if got.DeckPath != ".zennotes/flashcards/inbox/Topic.md.cards.json" {
+		t.Errorf("deckPath = %q", got.DeckPath)
+	}
+	if got.CardCount != 2 {
+		t.Errorf("cardCount = %d, want 2", got.CardCount)
+	}
+}
+
+func TestListFlashcardDecksEmptyWhenNoDir(t *testing.T) {
+	v, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decks, err := v.ListFlashcardDecks()
+	if err != nil {
+		t.Fatalf("expected no error for a vault with no decks, got %v", err)
+	}
+	if len(decks) != 0 {
+		t.Errorf("expected empty deck list, got %d", len(decks))
+	}
+}

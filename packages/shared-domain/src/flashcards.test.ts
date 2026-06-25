@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  appendReviewGrade,
   buildCardIndex,
   checkRecallAnswer,
+  countDailyProgress,
+  countReviewsOnDay,
   deckPathForNote,
   difficultyLabel,
   findSourceQuoteOffset,
@@ -10,14 +13,23 @@ import {
   flashcardsTabPath,
   flashcardsTitleFromTab,
   isFlashcardInternalPath,
+  isFlashcardLogPath,
   isFlashcardsTabPath,
+  isStudyTabPath,
+  logPathForNote,
   notePathFromDeckPath,
   notePathFromFlashcardsTab,
+  notePathFromStudyTab,
   normalizeDraft,
   relocateDeckPath,
+  relocateLogPath,
   scoreRubric,
   scoreToRating,
+  STUDY_TAB_PATH,
+  studyTabPath,
+  studyTitleFromTab,
   type FlashcardDraft,
+  type ReviewGrade,
   type Rubric
 } from './flashcards'
 
@@ -87,6 +99,81 @@ describe('deck + tab path helpers', () => {
       from: '.zennotes/flashcards/a/Old.md.cards.json',
       to: '.zennotes/flashcards/b/New.md.cards.json'
     })
+  })
+})
+
+describe('study tab + review-log helpers', () => {
+  it('recognizes the global and per-note study tabs', () => {
+    expect(STUDY_TAB_PATH).toBe('zen://study')
+    expect(isStudyTabPath(STUDY_TAB_PATH)).toBe(true)
+    expect(notePathFromStudyTab(STUDY_TAB_PATH)).toBeNull()
+    expect(studyTitleFromTab(STUDY_TAB_PATH)).toBe('Study')
+
+    const tab = studyTabPath('inbox/My Note.md')
+    expect(isStudyTabPath(tab)).toBe(true)
+    expect(notePathFromStudyTab(tab)).toBe('inbox/My Note.md')
+    expect(studyTitleFromTab(tab)).toBe('Study · My Note')
+    expect(isStudyTabPath('zen://flashcards/x')).toBe(false)
+  })
+
+  it('maps note path → log path and flags it internal (distinct from deck path)', () => {
+    expect(logPathForNote('a/Note.md')).toBe('.zennotes/flashcards/a/Note.md.cards.log.json')
+    expect(isFlashcardLogPath('.zennotes/flashcards/a/Note.md.cards.log.json')).toBe(true)
+    // A deck path is NOT a log path and vice-versa.
+    expect(isFlashcardLogPath(deckPathForNote('a/Note.md'))).toBe(false)
+    expect(notePathFromDeckPath(logPathForNote('a/Note.md'))).toBeNull()
+    expect(relocateLogPath('a/Old.md', 'b/New.md')).toEqual({
+      from: '.zennotes/flashcards/a/Old.md.cards.log.json',
+      to: '.zennotes/flashcards/b/New.md.cards.log.json'
+    })
+  })
+
+  it('appends grades and counts those from today', () => {
+    const grade = (reviewedAt: string): ReviewGrade => ({
+      cardId: 'c1',
+      reviewedAt,
+      predictedRating: 'good',
+      rating: 'good'
+    })
+    const now = new Date('2026-06-25T12:00:00.000Z')
+    let log = appendReviewGrade(null, 'a/Note.md', grade(now.toISOString()))
+    expect(log.grades).toHaveLength(1)
+    expect(log.sourceNotePath).toBe('a/Note.md')
+    log = appendReviewGrade(log, 'a/Note.md', grade('2026-06-24T12:00:00.000Z'))
+    expect(log.grades).toHaveLength(2)
+    expect(countReviewsOnDay(log.grades, now)).toBe(1)
+  })
+
+  it('counts new-introduced-today vs other reviews today across logs', () => {
+    const now = new Date('2026-06-25T12:00:00.000Z')
+    const g = (cardId: string, reviewedAt: string): ReviewGrade => ({
+      cardId,
+      reviewedAt,
+      predictedRating: 'good',
+      rating: 'good'
+    })
+    const logs = [
+      {
+        version: 1 as const,
+        sourceNotePath: 'a.md',
+        grades: [
+          // card A: first seen yesterday, reviewed again today → a review, not new
+          g('A', '2026-06-24T09:00:00.000Z'),
+          g('A', '2026-06-25T09:00:00.000Z'),
+          // card B: first (and only) grade is today → introduced today (new)
+          g('B', '2026-06-25T10:00:00.000Z')
+        ]
+      },
+      {
+        version: 1 as const,
+        sourceNotePath: 'b.md',
+        // card C: first grade today → new
+        grades: [g('C', '2026-06-25T11:00:00.000Z')]
+      }
+    ]
+    const { newDoneToday, reviewsDoneToday } = countDailyProgress(logs, now)
+    expect(newDoneToday).toBe(2) // B and C
+    expect(reviewsDoneToday).toBe(1) // A's second grade today
   })
 })
 

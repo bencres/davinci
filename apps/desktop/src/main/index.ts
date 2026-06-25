@@ -123,12 +123,17 @@ import {
   readFlashcards,
   writeFlashcards,
   listFlashcardDecks,
+  readReviewLog,
+  appendReviewGrade,
+  readStudyGamification,
+  writeStudyGamification,
   relocateFlashcards,
   deleteFlashcards,
   generateFlashcards,
   MissingAnthropicKeyError
 } from './flashcards'
-import type { FlashcardDeck } from '@shared/flashcards'
+import type { FlashcardDeck, ReviewGrade } from '@shared/flashcards'
+import type { StudyGamification } from '@shared/study-stats'
 import { VaultWatcher } from './watcher'
 import { WindowVaultRegistry } from './window-vaults'
 import { renderTikz } from './tikz'
@@ -2302,6 +2307,26 @@ function registerIpc(): void {
   handle(IPC.VAULT_LIST_FLASHCARDS, async () => {
     ensureLocalForFlashcards()
     return await listFlashcardDecks(requireVault().root)
+  })
+
+  handle(IPC.VAULT_READ_REVIEW_LOG, async (_e, notePath: string) => {
+    ensureLocalForFlashcards()
+    return await readReviewLog(requireVault().root, notePath)
+  })
+
+  handle(IPC.VAULT_APPEND_REVIEW_GRADE, async (_e, notePath: string, grade: ReviewGrade) => {
+    ensureLocalForFlashcards()
+    return await appendReviewGrade(requireVault().root, notePath, grade)
+  })
+
+  handle(IPC.VAULT_READ_STUDY_GAMIFICATION, async () => {
+    ensureLocalForFlashcards()
+    return await readStudyGamification(requireVault().root)
+  })
+
+  handle(IPC.VAULT_WRITE_STUDY_GAMIFICATION, async (_e, gamification: StudyGamification) => {
+    ensureLocalForFlashcards()
+    return await writeStudyGamification(requireVault().root, gamification)
   })
 
   handle(IPC.AI_GENERATE_FLASHCARDS, async (_e, notePath: string, opts: { model?: string }) => {

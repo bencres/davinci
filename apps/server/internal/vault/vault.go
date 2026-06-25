@@ -793,6 +793,75 @@ func isSkippableWalkErr(err error) bool {
 	return errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission)
 }
 
+// ListFlashcardDecks enumerates every flashcard deck under
+// .zennotes/flashcards/ (source note + card count) for the cross-deck study
+// queue. Mirrors the desktop main listFlashcardDecks. Review-log sidecars
+// (.cards.log.json) are skipped since they don't end with the deck suffix.
+func (v *Vault) ListFlashcardDecks() ([]FlashcardDeckSummary, error) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	const flashcardsDirRel = internalVaultDir + "/flashcards"
+	const deckSuffix = ".cards.json"
+	out := []FlashcardDeckSummary{}
+	base := filepath.Join(v.root, internalVaultDir, "flashcards")
+
+	var walk func(dir string) error
+	walk = func(dir string) error {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if isSkippableWalkErr(err) {
+				return nil
+			}
+			return err
+		}
+		for _, entry := range entries {
+			full := filepath.Join(dir, entry.Name())
+			if entry.IsDir() {
+				if err := walk(full); err != nil {
+					return err
+				}
+				continue
+			}
+			if !strings.HasSuffix(entry.Name(), deckSuffix) {
+				continue
+			}
+			rel, err := filepath.Rel(v.root, full)
+			if err != nil {
+				continue
+			}
+			relSlash := filepath.ToSlash(rel)
+			prefix := flashcardsDirRel + "/"
+			if !strings.HasPrefix(relSlash, prefix) {
+				continue
+			}
+			sourceNotePath := strings.TrimSuffix(strings.TrimPrefix(relSlash, prefix), deckSuffix)
+			if sourceNotePath == "" {
+				continue
+			}
+			cardCount := 0
+			if data, err := os.ReadFile(full); err == nil {
+				var parsed struct {
+					Cards []json.RawMessage `json:"cards"`
+				}
+				if json.Unmarshal(data, &parsed) == nil {
+					cardCount = len(parsed.Cards)
+				}
+			}
+			out = append(out, FlashcardDeckSummary{
+				SourceNotePath: sourceNotePath,
+				DeckPath:       relSlash,
+				CardCount:      cardCount,
+			})
+		}
+		return nil
+	}
+
+	if err := walk(base); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (v *Vault) ListNotes() ([]NoteMeta, error) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()

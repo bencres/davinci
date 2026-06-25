@@ -14,17 +14,27 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import Anthropic from '@anthropic-ai/sdk'
 import {
+  appendReviewGrade as appendReviewGradePure,
   deckPathForNote,
   emptyDeck,
+  logPathForNote,
   normalizeDraft,
   notePathFromDeckPath,
   relocateDeckPath,
+  relocateLogPath,
   FLASHCARDS_DIR,
   FLASHCARD_STORE_VERSION,
   type FlashcardDeck,
   type FlashcardDeckSummary,
-  type FlashcardDraft
+  type FlashcardDraft,
+  type ReviewGrade,
+  type ReviewLogFile
 } from '@shared/flashcards'
+import {
+  DEFAULT_STUDY_GAMIFICATION,
+  normalizeGamification,
+  type StudyGamification
+} from '@shared/study-stats'
 import type { FlashcardDensity } from '@shared/ipc'
 import { DEFAULT_FLASHCARD_DENSITY } from '@shared/ipc'
 import type { FlashcardCardMix } from '@zennotes/bridge-contract/bridge'
@@ -143,10 +153,90 @@ export async function listFlashcardDecks(root: string): Promise<FlashcardDeckSum
   return out
 }
 
+// ---------------------------------------------------------------------------
+// Study gamification config IO (single vault-wide file beside the decks).
+// ---------------------------------------------------------------------------
+
+/** Vault-relative path of the persisted gamification config. */
+const GAMIFICATION_FILE = `${FLASHCARDS_DIR}/gamification.json`
+
+/** Read the study gamification config, falling back to defaults when absent/corrupt. */
+export async function readStudyGamification(root: string): Promise<StudyGamification> {
+  const abs = absolutePath(root, GAMIFICATION_FILE)
+  let raw: string
+  try {
+    raw = await fs.readFile(abs, 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ...DEFAULT_STUDY_GAMIFICATION }
+    throw err
+  }
+  try {
+    return normalizeGamification(JSON.parse(raw))
+  } catch {
+    return { ...DEFAULT_STUDY_GAMIFICATION }
+  }
+}
+
+/** Persist the study gamification config (normalized first), returning the stored value. */
+export async function writeStudyGamification(
+  root: string,
+  gam: StudyGamification
+): Promise<StudyGamification> {
+  const normalized = normalizeGamification(gam)
+  const abs = absolutePath(root, GAMIFICATION_FILE)
+  await writeFileAtomic(abs, JSON.stringify(normalized, null, 2))
+  return normalized
+}
+
+/** Read the append-only review log for a note, or null when none exists. */
+export async function readReviewLog(root: string, notePath: string): Promise<ReviewLogFile | null> {
+  const abs = absolutePath(root, logPathForNote(notePath))
+  let raw: string
+  try {
+    raw = await fs.readFile(abs, 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw err
+  }
+  try {
+    const parsed = JSON.parse(raw) as ReviewLogFile
+    if (!parsed || !Array.isArray(parsed.grades)) return null
+    return parsed
+  } catch {
+    return null // corrupt log shouldn't crash the app; treat as absent
+  }
+}
+
+/** Append one grade to a note's review log (creating the file as needed). */
+export async function appendReviewGrade(
+  root: string,
+  notePath: string,
+  grade: ReviewGrade
+): Promise<ReviewLogFile> {
+  const existing = await readReviewLog(root, notePath)
+  const next = appendReviewGradePure(existing, notePath, grade)
+  const abs = absolutePath(root, logPathForNote(notePath))
+  await writeFileAtomic(abs, JSON.stringify(next, null, 2))
+  return next
+}
+
+/** Move a file when its note moves (rewriting nothing). No-op when absent. */
+async function relocateFile(root: string, from: string, to: string): Promise<void> {
+  const fromAbs = absolutePath(root, from)
+  try {
+    await fs.access(fromAbs)
+  } catch {
+    return
+  }
+  const toAbs = absolutePath(root, to)
+  await fs.mkdir(path.dirname(toAbs), { recursive: true })
+  await fs.rename(fromAbs, toAbs)
+}
+
 /**
- * Move a note's deck file when the note is renamed/moved/trashed (and rewrite
- * its `sourceNotePath`). No-op when the note has no deck. Used by the vault
- * rename/move/trash handlers so decks never orphan.
+ * Move a note's deck AND review-log files when the note is renamed/moved/trashed
+ * (and rewrite the deck's `sourceNotePath`). No-op for files that don't exist.
+ * Used by the vault rename/move/trash handlers so decks never orphan.
  */
 export async function relocateFlashcards(
   root: string,
@@ -159,25 +249,29 @@ export async function relocateFlashcards(
   const toAbs = absolutePath(root, to)
   try {
     await fs.access(fromAbs)
+    const deck = await readFlashcards(root, oldNotePath)
+    await fs.mkdir(path.dirname(toAbs), { recursive: true })
+    await fs.rename(fromAbs, toAbs)
+    if (deck) {
+      // Rewrite the recorded source path so the deck stays self-describing.
+      await writeFlashcards(root, newNotePath, { ...deck, sourceNotePath: newNotePath })
+    }
   } catch {
-    return // no deck to move
+    // no deck to move
   }
-  const deck = await readFlashcards(root, oldNotePath)
-  await fs.mkdir(path.dirname(toAbs), { recursive: true })
-  await fs.rename(fromAbs, toAbs)
-  if (deck) {
-    // Rewrite the recorded source path so the deck stays self-describing.
-    await writeFlashcards(root, newNotePath, { ...deck, sourceNotePath: newNotePath })
-  }
+  // Carry the review log alongside the deck (no content rewrite needed).
+  const log = relocateLogPath(oldNotePath, newNotePath)
+  await relocateFile(root, log.from, log.to)
 }
 
-/** Delete a note's deck file (on permanent delete). No-op when absent. */
+/** Delete a note's deck + review-log files (on permanent delete). No-op when absent. */
 export async function deleteFlashcards(root: string, notePath: string): Promise<void> {
-  const abs = absolutePath(root, deckPathForNote(notePath))
-  try {
-    await fs.unlink(abs)
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+  for (const rel of [deckPathForNote(notePath), logPathForNote(notePath)]) {
+    try {
+      await fs.unlink(absolutePath(root, rel))
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    }
   }
 }
 

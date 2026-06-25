@@ -45,8 +45,11 @@ import type {
 import type {
   FlashcardDeck,
   FlashcardDeckSummary,
-  FlashcardDraft
+  FlashcardDraft,
+  ReviewGrade,
+  ReviewLogFile
 } from '@zennotes/shared-domain/flashcards'
+import type { StudyGamification } from '@zennotes/shared-domain/study-stats'
 import type {
   McpClientId,
   McpClientStatus,
@@ -197,6 +200,14 @@ export interface ZenBridge {
   writeFlashcards(notePath: string, deck: FlashcardDeck): Promise<FlashcardDeck>
   /** Enumerate all decks (path + card count) for the cross-deck index. */
   listFlashcardDecks(): Promise<FlashcardDeckSummary[]>
+  /** The append-only review-grade log for a note, or null when none exists. */
+  readReviewLog(notePath: string): Promise<ReviewLogFile | null>
+  /** Append one review grade to a note's log (creating it as needed). */
+  appendReviewGrade(notePath: string, grade: ReviewGrade): Promise<ReviewLogFile>
+  /** Read the vault-wide study gamification config (defaults when absent). */
+  readStudyGamification(): Promise<StudyGamification>
+  /** Persist the vault-wide study gamification config, returning the stored value. */
+  writeStudyGamification(gamification: StudyGamification): Promise<StudyGamification>
   /** Generate draft cards from a note via Claude. Desktop-only in Phase 1. */
   generateFlashcards(notePath: string, opts: GenerateOptions): Promise<GenerateResult>
   /** Whether an Anthropic API key is stored (never returns the key itself). */

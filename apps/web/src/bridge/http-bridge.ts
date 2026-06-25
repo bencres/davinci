@@ -87,12 +87,19 @@ import type {
   McpServerRuntime
 } from '@shared/mcp-clients'
 import {
+  appendReviewGrade as appendReviewGradePure,
   deckPathForNote,
+  FLASHCARDS_DIR,
   isFlashcardInternalPath,
+  logPathForNote,
   relocateDeckPath,
+  relocateLogPath,
   type FlashcardDeck,
-  type FlashcardDeckSummary
+  type FlashcardDeckSummary,
+  type ReviewGrade,
+  type ReviewLogFile
 } from '@shared/flashcards'
+import { normalizeGamification, type StudyGamification } from '@shared/study-stats'
 import type { GenerateOptions, GenerateResult } from '@zennotes/bridge-contract/bridge'
 
 const WEB_CAPABILITIES: ZenCapabilities = {
@@ -955,13 +962,53 @@ async function writeFlashcards(notePath: string, deck: FlashcardDeck): Promise<F
 }
 
 /**
- * The cross-deck index isn't built on web in Phase 1 — deck files live under
- * the internal `.zennotes/` dir, which the public folder listing intentionally
- * hides, and nothing consumes the list in the Phase 1 UI. Phase 2 wires a live
- * index (desktop enumerates the dir directly).
+ * Enumerate every deck (source note + card count) for the cross-deck study
+ * queue. Deck files live under the internal `.zennotes/` dir, which the public
+ * folder listing hides, so this uses a dedicated server endpoint that walks
+ * `.zennotes/flashcards/`.
  */
 function listFlashcardDecks(): Promise<FlashcardDeckSummary[]> {
-  return Promise.resolve([])
+  return jsonRequest<FlashcardDeckSummary[]>('/flashcards/decks')
+}
+
+/** Read the append-only review log for a note (reuses the note file endpoint). */
+async function readReviewLog(notePath: string): Promise<ReviewLogFile | null> {
+  const text = await readFileTextOrNull(logPathForNote(notePath))
+  if (text == null) return null
+  try {
+    const parsed = JSON.parse(text) as ReviewLogFile
+    return parsed && Array.isArray(parsed.grades) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/** Append one grade to a note's review log (read-modify-write the JSON file). */
+async function appendReviewGrade(notePath: string, grade: ReviewGrade): Promise<ReviewLogFile> {
+  const existing = await readReviewLog(notePath)
+  const next = appendReviewGradePure(existing, notePath, grade)
+  await writeNote(logPathForNote(notePath), `${JSON.stringify(next, null, 2)}\n`)
+  return next
+}
+
+const GAMIFICATION_FILE = `${FLASHCARDS_DIR}/gamification.json`
+
+/** Read the vault-wide study gamification config (reuses the note file endpoint). */
+async function readStudyGamification(): Promise<StudyGamification> {
+  const text = await readFileTextOrNull(GAMIFICATION_FILE)
+  if (text == null) return normalizeGamification(null)
+  try {
+    return normalizeGamification(JSON.parse(text))
+  } catch {
+    return normalizeGamification(null)
+  }
+}
+
+/** Persist the vault-wide study gamification config. */
+async function writeStudyGamification(gamification: StudyGamification): Promise<StudyGamification> {
+  const normalized = normalizeGamification(gamification)
+  await writeNote(GAMIFICATION_FILE, `${JSON.stringify(normalized, null, 2)}\n`)
+  return normalized
 }
 
 const DESKTOP_ONLY_GENERATION = 'Flashcard generation is available on the desktop app for now.'
@@ -987,10 +1034,18 @@ async function relocateFlashcardsOnWeb(oldNotePath: string, newNotePath: string)
   if (oldNotePath === newNotePath) return
   try {
     const deck = await readFlashcards(oldNotePath)
-    if (!deck) return
-    const { from } = relocateDeckPath(oldNotePath, newNotePath)
-    await writeFlashcards(newNotePath, { ...deck, sourceNotePath: newNotePath })
-    await deleteNote(from).catch(() => {})
+    if (deck) {
+      const { from } = relocateDeckPath(oldNotePath, newNotePath)
+      await writeFlashcards(newNotePath, { ...deck, sourceNotePath: newNotePath })
+      await deleteNote(from).catch(() => {})
+    }
+    // Carry the review log alongside the deck.
+    const log = await readReviewLog(oldNotePath)
+    if (log) {
+      const { from } = relocateLogPath(oldNotePath, newNotePath)
+      await writeNote(logPathForNote(newNotePath), `${JSON.stringify({ ...log, sourceNotePath: newNotePath }, null, 2)}\n`)
+      await deleteNote(from).catch(() => {})
+    }
   } catch {
     // swallow — see doc comment
   }
@@ -1555,6 +1610,10 @@ export const httpBridge: ZenBridge = {
   readFlashcards,
   writeFlashcards,
   listFlashcardDecks,
+  readReviewLog,
+  appendReviewGrade,
+  readStudyGamification,
+  writeStudyGamification,
   generateFlashcards,
   getAnthropicKeyPresent,
   setAnthropicKey,

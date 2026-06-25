@@ -77,6 +77,10 @@ export const IPC = {
   VAULT_READ_FLASHCARDS: 'vault:read-flashcards',
   VAULT_WRITE_FLASHCARDS: 'vault:write-flashcards',
   VAULT_LIST_FLASHCARDS: 'vault:list-flashcards',
+  VAULT_READ_REVIEW_LOG: 'vault:read-review-log',
+  VAULT_APPEND_REVIEW_GRADE: 'vault:append-review-grade',
+  VAULT_READ_STUDY_GAMIFICATION: 'vault:read-study-gamification',
+  VAULT_WRITE_STUDY_GAMIFICATION: 'vault:write-study-gamification',
   AI_GENERATE_FLASHCARDS: 'ai:generate-flashcards',
   AI_GET_ANTHROPIC_KEY_PRESENT: 'ai:get-anthropic-key-present',
   AI_SET_ANTHROPIC_KEY: 'ai:set-anthropic-key',
@@ -339,9 +343,15 @@ export interface VaultSettings {
    * so domain emphasis is editable data, not a hardcoded branch.
    */
   flashcardGuidance?: string
+  /** Max NEW cards introduced per day in a study session (Anki-style). */
+  flashcardNewPerDay?: number
+  /** Max review cards scheduled per day in a study session. */
+  flashcardMaxReviewsPerDay?: number
 }
 
 export const DEFAULT_FLASHCARD_MODEL = 'claude-sonnet-4-6'
+export const DEFAULT_FLASHCARD_NEW_PER_DAY = 20
+export const DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY = 200
 
 /**
  * Default persistent generation guidance. Tuned for the primary use case
@@ -387,7 +397,9 @@ export const DEFAULT_VAULT_SETTINGS: VaultSettings = {
   favorites: [],
   flashcardModel: DEFAULT_FLASHCARD_MODEL,
   flashcardDensity: DEFAULT_FLASHCARD_DENSITY,
-  flashcardGuidance: DEFAULT_FLASHCARD_GUIDANCE
+  flashcardGuidance: DEFAULT_FLASHCARD_GUIDANCE,
+  flashcardNewPerDay: DEFAULT_FLASHCARD_NEW_PER_DAY,
+  flashcardMaxReviewsPerDay: DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
 }
 
 export interface NoteMeta {
