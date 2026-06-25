@@ -2754,6 +2754,25 @@ export function SettingsModal(): JSX.Element {
     visibleSearchResult?.category ??
     null
 
+  // When the visible search result is a setting that lives on a sub-tab, open
+  // that sub-tab so the matched control is actually shown — not only when the
+  // result is clicked, but also when search auto-selects it. Mirrors the
+  // on-click search jump and keeps every setting reachable via search.
+  const visibleSettingResultId =
+    visibleSearchResult?.type === 'setting' ? visibleSearchResult.id : null
+  useEffect(() => {
+    if (visibleSearchResult?.type !== 'setting' || !visibleCategory?.subTabs) return
+    const subTabId = visibleCategory.subTabs.find((tab) =>
+      tab.searchIds?.includes(visibleSearchResult.targetId)
+    )?.id
+    if (!subTabId) return
+    const categoryId = visibleCategory.id
+    setActiveSubTabByCategory((prev) =>
+      prev[categoryId] === subTabId ? prev : { ...prev, [categoryId]: subTabId }
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleSettingResultId])
+
   return (
     <>
       <div
