@@ -4,6 +4,7 @@ import {
   checkRecallAnswer,
   deckPathForNote,
   difficultyLabel,
+  findSourceQuoteOffset,
   draftToCard,
   emptyDeck,
   flashcardsTabPath,
@@ -187,6 +188,23 @@ describe('buildCardIndex', () => {
     const index = buildCardIndex([deckA, deckB])
     expect(index['c1'].sourceNotePath).toBe('a.md')
     expect(index['c2'].sourceNotePath).toBe('b.md')
+  })
+})
+
+describe('findSourceQuoteOffset', () => {
+  const body = 'Intro line.\n\nThe mitochondria is the powerhouse of the cell.\n\nMore text.'
+  it('finds an exact quote and returns its offset', () => {
+    const quote = 'powerhouse of the cell'
+    expect(findSourceQuoteOffset(body, quote)).toBe(body.indexOf(quote))
+  })
+  it('matches across collapsed whitespace/newlines', () => {
+    // Quote captured with a single space where the note has a newline.
+    expect(findSourceQuoteOffset('a\nfoo   bar\nb', 'foo bar')).toBe(2)
+  })
+  it('returns null when the quote is absent or empty', () => {
+    expect(findSourceQuoteOffset(body, 'not present')).toBeNull()
+    expect(findSourceQuoteOffset(body, '   ')).toBeNull()
+    expect(findSourceQuoteOffset('', 'x')).toBeNull()
   })
 })
 

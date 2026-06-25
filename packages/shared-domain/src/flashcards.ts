@@ -435,6 +435,28 @@ export function scoreToRating(score: number): FsrsRating {
   return 'easy'
 }
 
+/**
+ * Locate a card's `sourceQuote` within its note body, returning the character
+ * offset of the matched block (or null when it can't be found — e.g. the note
+ * was edited after generation). Tries an exact match first, then a
+ * whitespace-flexible match so a quote captured with collapsed spaces/newlines
+ * still resolves. Used to jump from a card directly to its source block.
+ */
+export function findSourceQuoteOffset(body: string, quote: string): number | null {
+  const q = quote.trim()
+  if (!q || !body) return null
+  const exact = body.indexOf(q)
+  if (exact >= 0) return exact
+  // Whitespace-flexible fallback: collapse internal whitespace to `\s+`.
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')
+  try {
+    const match = new RegExp(escaped).exec(body)
+    return match ? match.index : null
+  } catch {
+    return null
+  }
+}
+
 const normalizeAnswerText = (s: string): string =>
   s.trim().toLowerCase().replace(/\s+/g, ' ')
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import {
   difficultyLabel,
+  findSourceQuoteOffset,
   notePathFromFlashcardsTab,
   flashcardsTitleFromTab,
   type FlashcardDraft,
@@ -10,6 +11,7 @@ import {
 } from '@shared/flashcards'
 import { matchesSequenceToken, matchesShortcut } from '../lib/keymaps'
 import { isAppOverlayOpen } from '../lib/overlay-open'
+import { ArrowUpRightIcon } from './icons'
 
 interface Props {
   tabPath: string
@@ -67,10 +69,34 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
   const setFocusedPanel = useStore((s) => s.setFocusedPanel)
   const closeActiveNote = useStore((s) => s.closeActiveNote)
   const setSettingsOpen = useStore((s) => s.setSettingsOpen)
+  const openNoteAtOffset = useStore((s) => s.openNoteAtOffset)
+  const selectNote = useStore((s) => s.selectNote)
 
   // This tab is the "review surface" only when it matches the active review note.
   const isReviewTarget = notePath != null && notePath === reviewNote
   const savedDeck = notePath ? deckByNote[notePath] : undefined
+
+  /** Open the source note scrolled to the card's quoted block (top of note if not found). */
+  const jumpToSource = useCallback(
+    async (quote: string | undefined) => {
+      if (!notePath) return
+      let body = useStore.getState().noteContents[notePath]?.body
+      if (body == null) {
+        try {
+          body = (await window.zen.readNote(notePath)).body
+        } catch {
+          body = ''
+        }
+      }
+      const offset = quote ? findSourceQuoteOffset(body ?? '', quote) : null
+      if (offset != null) {
+        await openNoteAtOffset(notePath, offset, { scrollMode: 'center' })
+      } else {
+        await selectNote(notePath)
+      }
+    },
+    [notePath, openNoteAtOffset, selectNote]
+  )
 
   const [focusedIndex, setFocusedIndex] = useState(0)
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
@@ -436,9 +462,10 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                           </div>
                         )}
                         {draft.sourceQuote && (
-                          <blockquote className="border-l-2 border-paper-300 pl-3 text-xs italic text-ink-500">
-                            {draft.sourceQuote}
-                          </blockquote>
+                          <SourceLink
+                            quote={draft.sourceQuote}
+                            onJump={() => void jumpToSource(draft.sourceQuote)}
+                          />
                         )}
                       </div>
                     )}
@@ -493,10 +520,23 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                   key={card.id}
                   className="rounded-xl border border-paper-300/60 bg-paper-50/40 px-4 py-3 text-sm"
                 >
-                  <div className="flex items-center gap-2">
-                    <CardBadge draft={card} />
-                    {card.userEdited && (
-                      <span className="text-2xs text-ink-400">edited</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <CardBadge draft={card} />
+                      {card.userEdited && (
+                        <span className="text-2xs text-ink-400">edited</span>
+                      )}
+                    </div>
+                    {card.sourceQuote && (
+                      <button
+                        type="button"
+                        onClick={() => void jumpToSource(card.sourceQuote)}
+                        title="Open the source block in the note"
+                        className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs font-medium text-ink-500 transition-colors hover:bg-paper-100/70 hover:text-accent"
+                      >
+                        Source
+                        <ArrowUpRightIcon width={11} height={11} />
+                      </button>
                     )}
                   </div>
                   <div className="mt-1 text-ink-900">{card.front}</div>
@@ -525,5 +565,30 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="text-2xs uppercase tracking-[0.14em] text-ink-500">{label}</span>
       {children}
     </label>
+  )
+}
+
+/** Clickable source-quote block that jumps to the originating block in the note. */
+function SourceLink({
+  quote,
+  onJump
+}: {
+  quote: string
+  onJump: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onJump}
+      title="Open the source block in the note"
+      className="group flex w-full items-start gap-1.5 rounded-md border-l-2 border-paper-300 bg-transparent px-3 py-1 text-left text-xs italic text-ink-500 transition-colors hover:border-accent/60 hover:bg-paper-100/60 hover:text-ink-700"
+    >
+      <span className="min-w-0 flex-1">{quote}</span>
+      <ArrowUpRightIcon
+        width={12}
+        height={12}
+        className="mt-0.5 shrink-0 text-ink-400 transition-colors group-hover:text-accent"
+      />
+    </button>
   )
 }
