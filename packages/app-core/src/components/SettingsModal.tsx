@@ -1543,6 +1543,7 @@ export function SettingsModal(): JSX.Element {
               value={vaultSettings.flashcardModel ?? DEFAULT_FLASHCARD_MODEL}
               settingId="flashcard-model"
               options={[
+                { value: 'claude-haiku-4-5', label: 'Haiku 4.5' },
                 { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
                 { value: 'claude-opus-4-8', label: 'Opus 4.8' }
               ]}

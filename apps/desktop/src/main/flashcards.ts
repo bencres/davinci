@@ -30,7 +30,11 @@ import { getAnthropicApiKey } from './secret-store'
 
 export const DEFAULT_FLASHCARD_MODEL = 'claude-sonnet-4-6'
 /** Models offered in Settings (default first). */
-export const FLASHCARD_MODELS = [DEFAULT_FLASHCARD_MODEL, 'claude-opus-4-8'] as const
+export const FLASHCARD_MODELS = [
+  DEFAULT_FLASHCARD_MODEL,
+  'claude-haiku-4-5',
+  'claude-opus-4-8'
+] as const
 
 /** Typed error the renderer maps to a "Set your key in Settings" prompt. */
 export class MissingAnthropicKeyError extends Error {
