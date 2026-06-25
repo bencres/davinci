@@ -843,7 +843,7 @@ function LabelInput({
 }): JSX.Element {
   const [text, setText] = useState(() => value.join(', '))
   useEffect(() => {
-    if (parseLabels(text).join(' ') !== value.join(' ')) {
+    if (parseLabels(text).join('\n') !== value.join('\n')) {
       setText(value.join(', '))
     }
     // Intentionally only react to external `value` changes, not local keystrokes.
