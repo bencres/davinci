@@ -190,9 +190,9 @@ export function buildCommands(options?: { includeUnavailable?: boolean }): Comma
     },
     {
       id: 'flashcards.generate',
-      title: 'Generate Flashcards from This Note',
+      title: 'Generate Study Cards from This Note',
       category: 'Note',
-      keywords: 'flashcard study learn anki srs quiz recall spaced repetition',
+      keywords: 'study flashcard learn anki srs quiz recall spaced repetition',
       shortcut: leaderShortcut('vim.leaderGenerateFlashcards'),
       when: () => !!getState().activeNote,
       run: async () => {

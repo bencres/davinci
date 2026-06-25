@@ -18,6 +18,7 @@ import {
   DEFAULT_WEEKLY_NOTE_LOCALE,
   DEFAULT_WEEKLY_NOTE_TITLE_PATTERN,
   DEFAULT_WEEKLY_NOTES_DIRECTORY,
+  DEFAULT_FLASHCARD_MODEL,
   AssetMeta,
   DeletedAsset,
   type FolderIconId,
@@ -195,7 +196,8 @@ const DEFAULT_VAULT_SETTINGS: VaultSettings = {
   },
   folderIcons: {},
   folderColors: {},
-  favorites: []
+  favorites: [],
+  flashcardModel: DEFAULT_FLASHCARD_MODEL
 }
 
 interface VaultTextSearchCandidate {
@@ -749,8 +751,15 @@ function cloneVaultSettings(settings: VaultSettings): VaultSettings {
     },
     folderIcons: { ...settings.folderIcons },
     folderColors: { ...settings.folderColors },
-    favorites: [...settings.favorites]
+    favorites: [...settings.favorites],
+    flashcardModel: settings.flashcardModel
   }
+}
+
+function normalizeFlashcardModel(value: unknown): string {
+  if (typeof value !== 'string') return DEFAULT_FLASHCARD_MODEL
+  const trimmed = value.trim()
+  return trimmed || DEFAULT_FLASHCARD_MODEL
 }
 
 function normalizeDailyNotesDirectory(value: unknown): string {
@@ -860,7 +869,8 @@ function normalizeVaultSettings(
       },
       folderIcons: {},
       folderColors: {},
-      favorites: []
+      favorites: [],
+      flashcardModel: DEFAULT_FLASHCARD_MODEL
     }
   }
   const candidate = value as {
@@ -884,6 +894,7 @@ function normalizeVaultSettings(
     folderIcons?: Record<string, unknown> | null
     folderColors?: Record<string, unknown> | null
     favorites?: unknown
+    flashcardModel?: unknown
   }
   const folderIcons: Record<string, FolderIconId> = {}
   if (candidate.folderIcons && typeof candidate.folderIcons === 'object') {
@@ -920,7 +931,8 @@ function normalizeVaultSettings(
     },
     folderIcons,
     folderColors: normalizeFolderColors(candidate.folderColors),
-    favorites: normalizeFavorites(candidate.favorites)
+    favorites: normalizeFavorites(candidate.favorites),
+    flashcardModel: normalizeFlashcardModel(candidate.flashcardModel)
   }
 }
 

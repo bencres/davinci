@@ -258,8 +258,8 @@ export function VimNav(): JSX.Element | null {
       },
       {
         keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderGenerateFlashcards'),
-        label: 'Generate flashcards',
-        detail: 'Generate spaced-repetition flashcards from the active note.'
+        label: 'Generate study cards',
+        detail: 'Generate spaced-repetition study cards from the active note.'
       }
     ]
     if (whichKeyState.allowEditorActions) {

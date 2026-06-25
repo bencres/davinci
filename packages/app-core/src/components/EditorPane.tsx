@@ -2361,7 +2361,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
         if (isFlashcardsTabPath(path)) {
           return {
             ...base,
-            title: `Flashcards · ${flashcardsTitleFromTab(path)}`,
+            title: `Study · ${flashcardsTitleFromTab(path)}`,
             isFlashcards: true
           }
         }

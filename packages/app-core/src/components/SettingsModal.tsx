@@ -1457,28 +1457,28 @@ export function SettingsModal(): JSX.Element {
     },
     {
       id: 'ai',
-      title: 'AI / Flashcards',
-      description: 'Connect an Anthropic API key and choose the model used to generate flashcards.',
-      keywords: ['anthropic', 'claude', 'api key', 'flashcard', 'model', 'ai', 'byok', 'generate'],
+      title: 'Study',
+      description: 'Connect an Anthropic API key and choose the model used to generate study cards.',
+      keywords: ['study', 'anthropic', 'claude', 'api key', 'flashcard', 'model', 'ai', 'byok', 'generate'],
       searchItems: [
         {
           id: 'anthropic-api-key',
           title: 'Anthropic API key',
           description: 'Bring-your-own-key, stored securely in your OS keychain.',
-          keywords: ['anthropic', 'api key', 'claude', 'byok', 'secret']
+          keywords: ['anthropic', 'api key', 'claude', 'byok', 'secret', 'study']
         },
         {
           id: 'flashcard-model',
-          title: 'Flashcard model',
-          description: 'Which Claude model generates your flashcards.',
-          keywords: ['model', 'sonnet', 'opus', 'claude']
+          title: 'Study model',
+          description: 'Which Claude model generates your study cards.',
+          keywords: ['model', 'sonnet', 'opus', 'haiku', 'claude', 'study']
         }
       ],
       content: (
         <div className="space-y-6">
           <Section
             title="Anthropic API key"
-            description="Flashcard generation calls Claude with your own key. The key is stored in your OS keychain on this device and never written to the vault or synced."
+            description="Study-card generation calls Claude with your own key. The key is stored in your OS keychain on this device and never written to the vault or synced."
           >
             <div className="space-y-4 px-5 py-5" {...settingsSearchTargetProps('anthropic-api-key')}>
               <div className="flex items-center gap-2 text-sm">
@@ -1534,12 +1534,12 @@ export function SettingsModal(): JSX.Element {
           </Section>
 
           <Section
-            title="Flashcard model"
-            description="The Claude model used to generate cards. Sonnet is faster and cheaper; Opus is the most capable."
+            title="Study model"
+            description="The Claude model used to generate study cards. Haiku is fastest and cheapest; Opus is the most capable."
           >
             <SegmentedRow
               label="Generation model"
-              description="Applies to new flashcard generations."
+              description="Applies to new study-card generations."
               value={vaultSettings.flashcardModel ?? DEFAULT_FLASHCARD_MODEL}
               settingId="flashcard-model"
               options={[

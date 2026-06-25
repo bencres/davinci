@@ -220,7 +220,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-6 py-6">
         <header className="flex flex-col gap-1">
           <div className="text-xs font-medium uppercase tracking-[0.2em] text-ink-500">
-            Flashcards
+            Study
           </div>
           <h1 className="font-serif text-2xl font-semibold text-ink-900">{title}</h1>
           <div className="text-sm text-ink-500">{notePath}</div>
@@ -229,7 +229,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
         {isReviewTarget && status === 'generating' && (
           <div className="flex items-center gap-3 rounded-2xl border border-paper-300/70 bg-paper-50/50 px-5 py-6 text-sm text-ink-600">
             <span className="inline-flex h-3 w-3 animate-pulse rounded-full bg-accent/70" />
-            Generating flashcards with Claude…
+            Generating study cards with Claude…
           </div>
         )}
 
@@ -521,7 +521,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
 
         {!isReviewTarget && !savedDeck && (
           <div className="rounded-2xl border border-paper-300/70 bg-paper-50/50 px-5 py-6 text-sm text-ink-600">
-            No saved flashcards for this note yet. Run “Generate Flashcards from This Note”.
+            No saved study cards for this note yet. Run “Generate Study Cards from This Note”.
           </div>
         )}
       </div>
