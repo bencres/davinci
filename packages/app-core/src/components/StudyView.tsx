@@ -4,7 +4,6 @@ import {
   checkRecallAnswer,
   difficultyLabel,
   findSourceQuoteOffset,
-  isStudyTabPath,
   notePathFromStudyTab,
   ratingToNumber,
   scoreRubric,
@@ -548,5 +547,3 @@ function StudyShell({ children }: { children: ReactNode }): JSX.Element {
     </div>
   )
 }
-
-export { isStudyTabPath }
