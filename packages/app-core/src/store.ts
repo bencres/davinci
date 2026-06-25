@@ -34,18 +34,38 @@ import {
   isDatabaseCsvPath
 } from '@shared/databases'
 import {
+  buildCardIndex,
+  countDailyProgress,
   draftToCard,
   emptyDeck,
   flashcardsTabPath,
+  isStudyTabPath,
   normalizeDraft,
+  STUDY_DASHBOARD_TAB_PATH,
+  STUDY_TAB_PATH,
+  studyTabPath,
   type Flashcard,
   type FlashcardDeck,
-  type FlashcardDraft
+  type FlashcardDraft,
+  type FsrsRating,
+  type GradedCriterion,
+  type ReviewGrade,
+  type ReviewLogFile
 } from '@shared/flashcards'
+import { selectDueQueue, type CardIndex } from '@shared/srs'
+import {
+  computeStudyStats,
+  DEFAULT_STUDY_GAMIFICATION,
+  type StudyGamification,
+  type StudyStats
+} from '@shared/study-stats'
+import { schedule } from './lib/srs-scheduler'
 import {
   DEFAULT_FLASHCARD_MODEL,
   DEFAULT_FLASHCARD_DENSITY,
-  DEFAULT_FLASHCARD_GUIDANCE
+  DEFAULT_FLASHCARD_GUIDANCE,
+  DEFAULT_FLASHCARD_NEW_PER_DAY,
+  DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
 } from '@shared/ipc'
 import type { FlashcardDensity } from '@shared/ipc'
 import type { FlashcardCardMix } from '@zennotes/bridge-contract/bridge'
@@ -1564,6 +1584,15 @@ function hasTasksViewOpen(state: { paneLayout: PaneLayout }): boolean {
   return allLeaves(state.paneLayout).some((leaf) => leaf.tabs.includes(TASKS_TAB_PATH))
 }
 
+/** True when the active pane's active tab is the study dashboard. */
+export function isStudyDashboardActive(state: {
+  paneLayout: PaneLayout
+  activePaneId: string
+}): boolean {
+  const leaf = findLeaf(state.paneLayout, state.activePaneId)
+  return leaf?.activeTab === STUDY_DASHBOARD_TAB_PATH
+}
+
 /** True when the active pane's active tab is the vault-wide Tags view. */
 export function isTagsViewActive(state: {
   paneLayout: PaneLayout
@@ -1634,6 +1663,16 @@ export interface FlashcardGenOptions {
   /** Soft target for card count; null = use the per-run cap. */
   maxCards: number | null
 }
+
+/** What a study session draws cards from: the whole vault, or one note's deck. */
+export type StudyScope = { kind: 'all' } | { kind: 'note'; notePath: string }
+
+/**
+ * Study-session phase. `front` shows the prompt (and captures the predicted
+ * rating); `revealed` shows the answer/rubric for grading; `summary` is the
+ * end-of-session recap.
+ */
+export type StudyPhase = 'idle' | 'loading' | 'front' | 'revealed' | 'summary'
 
 interface Store {
   vault: VaultInfo | null
@@ -1947,6 +1986,54 @@ interface Store {
   saveReviewedFlashcards: (acceptedIndexes: number[]) => Promise<void>
   /** Read a note's saved deck into `flashcardDeckByNote`. */
   loadFlashcardDeck: (notePath: string) => Promise<void>
+
+  // --- Study sessions (Phase 2: FSRS spaced-repetition review loop) ---
+  /** What the current session draws from (null when no session is open). */
+  studyScope: StudyScope | null
+  /** Cross-deck index (cardId → card + sourceNotePath) for the open session. */
+  studyIndex: CardIndex | null
+  /** Ordered cardIds remaining to review this session. */
+  studyQueue: string[]
+  /** Position within `studyQueue`. */
+  studyCursor: number
+  studyPhase: StudyPhase
+  /** Calibration: the rating predicted BEFORE reveal for the current card. */
+  studyPredicted: FsrsRating | null
+  /** Grades recorded this session (for the summary; persisted in Phase 2b). */
+  studySessionGrades: ReviewGrade[]
+  studyError: string | null
+  /**
+   * Build the due queue for `scope`, open the study tab, and start reviewing.
+   * Global (`{kind:'all'}`) draws due cards across every deck; per-note draws
+   * from one deck.
+   */
+  startStudySession: (scope: StudyScope) => Promise<void>
+  /** Capture the pre-reveal predicted rating for the current card. */
+  setStudyPredicted: (rating: FsrsRating) => void
+  /** Move the current card from `front` to `revealed`. */
+  revealCurrentCard: () => void
+  /** Grade the current card: reschedule its SRS, persist, record, and advance. */
+  gradeCurrentCard: (
+    rating: FsrsRating,
+    detail?: { learnerAnswer?: string; criteria?: GradedCriterion[]; score?: number }
+  ) => Promise<void>
+  /** Close the study tab and reset session state. */
+  endStudySession: () => void
+
+  // --- Study dashboard (gamified study hub) ---
+  /** Aggregated dashboard stats (streak, heatmap, mastery…), null until loaded. */
+  studyStats: StudyStats | null
+  /** Persisted gamification config (editable daily goal + streak bookkeeping). */
+  studyGamification: StudyGamification | null
+  studyStatsLoading: boolean
+  studyStatsError: string | null
+  /** Open (or focus) the dashboard tab and load its stats. */
+  openStudyDashboard: () => Promise<void>
+  /** (Re)compute dashboard stats from every deck + review log + the config. */
+  loadStudyStats: () => Promise<void>
+  /** Persist a new daily-goal target and recompute stats. */
+  setStudyDailyGoal: (goal: number) => Promise<void>
+
   /** Rename a record's linked page note to match its title (no-op if unlinked). */
   renameRecordPage: (csvPath: string, rowId: string) => Promise<void>
   /** Add or remove a tag from the Tags view selection without touching
@@ -3240,6 +3327,18 @@ export const useStore = create<Store>((set, get) => {
     instructions: '',
     maxCards: null
   },
+  studyScope: null,
+  studyIndex: null,
+  studyQueue: [],
+  studyCursor: 0,
+  studyPhase: 'idle',
+  studyPredicted: null,
+  studySessionGrades: [],
+  studyError: null,
+  studyStats: null,
+  studyGamification: null,
+  studyStatsLoading: false,
+  studyStatsError: null,
   selectedTags: [],
   tagMatchMode: 'all',
   focusedPanel: null,
@@ -3892,6 +3991,265 @@ export const useStore = create<Store>((set, get) => {
       }
     } catch (err) {
       console.error('loadFlashcardDeck failed', err)
+    }
+  },
+
+  startStudySession: async (scope) => {
+    const tabPath = scope.kind === 'all' ? STUDY_TAB_PATH : studyTabPath(scope.notePath)
+    set({
+      studyScope: scope,
+      studyPhase: 'loading',
+      studyIndex: null,
+      studyQueue: [],
+      studyCursor: 0,
+      studyPredicted: null,
+      studySessionGrades: [],
+      studyError: null
+    })
+    // Open (or focus) the study tab and hand keyboard focus to the editor pane.
+    await get().openNoteInPane(get().activePaneId, tabPath)
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    set({ focusedPanel: 'editor' })
+    try {
+      // Build the cross-deck index: all decks for the global queue, or one deck.
+      const decks: FlashcardDeck[] = []
+      const cache = { ...get().flashcardDeckByNote }
+      if (scope.kind === 'all') {
+        const summaries = await window.zen.listFlashcardDecks()
+        for (const s of summaries) {
+          const deck = await window.zen.readFlashcards(s.sourceNotePath)
+          if (deck) {
+            decks.push(deck)
+            cache[s.sourceNotePath] = deck
+          }
+        }
+      } else {
+        const deck =
+          get().flashcardDeckByNote[scope.notePath] ??
+          (await window.zen.readFlashcards(scope.notePath))
+        if (deck) {
+          decks.push(deck)
+          cache[scope.notePath] = deck
+        }
+      }
+      const index = buildCardIndex(decks)
+      // Apply per-day new/review caps (Anki-style). "Done today" comes from each
+      // deck's review log — only read those when a finite cap is actually set.
+      const vs = get().vaultSettings
+      const newPerDay = vs.flashcardNewPerDay ?? DEFAULT_FLASHCARD_NEW_PER_DAY
+      const maxReviewsPerDay = vs.flashcardMaxReviewsPerDay ?? DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
+      const now = new Date()
+      let newDoneToday = 0
+      let reviewsDoneToday = 0
+      if (Number.isFinite(newPerDay) || Number.isFinite(maxReviewsPerDay)) {
+        const notePaths = Array.from(new Set(decks.map((d) => d.sourceNotePath)))
+        const logs: ReviewLogFile[] = []
+        for (const p of notePaths) {
+          try {
+            const log = await window.zen.readReviewLog(p)
+            if (log) logs.push(log)
+          } catch {
+            // a missing/corrupt log just means no progress recorded for that note
+          }
+        }
+        const progress = countDailyProgress(logs, now)
+        newDoneToday = progress.newDoneToday
+        reviewsDoneToday = progress.reviewsDoneToday
+      }
+      const queue = selectDueQueue(index, {
+        now,
+        newPerDay,
+        maxReviewsPerDay,
+        newDoneToday,
+        reviewsDoneToday
+      })
+      set({
+        flashcardDeckByNote: cache,
+        studyIndex: index,
+        studyQueue: queue,
+        studyCursor: 0,
+        studyPredicted: null,
+        studyPhase: queue.length === 0 ? 'summary' : 'front'
+      })
+    } catch (err) {
+      console.error('startStudySession failed', err)
+      set({
+        studyPhase: 'summary',
+        studyError: err instanceof Error ? err.message : 'Could not load cards to study.'
+      })
+    }
+  },
+
+  setStudyPredicted: (rating) => {
+    if (get().studyPhase !== 'front') return
+    set({ studyPredicted: rating })
+  },
+
+  revealCurrentCard: () => {
+    if (get().studyPhase !== 'front') return
+    set({ studyPhase: 'revealed' })
+  },
+
+  gradeCurrentCard: async (rating, detail) => {
+    const s = get()
+    if (s.studyPhase !== 'revealed') return
+    const index = s.studyIndex
+    const cardId = s.studyQueue[s.studyCursor]
+    const entry = index?.[cardId]
+    if (!index || !entry) return
+
+    const now = new Date()
+    const { srs } = schedule(entry.card.srs, rating, now)
+    const updatedCard: Flashcard = { ...entry.card, srs }
+    const notePath = entry.sourceNotePath
+
+    // Persist the new SRS state immediately (rewrite the note's deck file). The
+    // append-only review log is added in Phase 2b.
+    try {
+      const deck =
+        get().flashcardDeckByNote[notePath] ?? (await window.zen.readFlashcards(notePath))
+      if (deck) {
+        const cards = deck.cards.map((c) => (c.id === cardId ? updatedCard : c))
+        const merged: FlashcardDeck = { ...deck, cards }
+        const saved = await window.zen.writeFlashcards(notePath, merged)
+        set((st) => ({ flashcardDeckByNote: { ...st.flashcardDeckByNote, [notePath]: saved } }))
+      }
+    } catch (err) {
+      console.error('gradeCurrentCard persist failed', err)
+    }
+
+    const grade: ReviewGrade = {
+      cardId,
+      reviewedAt: now.toISOString(),
+      predictedRating: get().studyPredicted ?? rating,
+      rating,
+      ...(detail?.learnerAnswer ? { learnerAnswer: detail.learnerAnswer } : {}),
+      ...(detail?.criteria ? { criteria: detail.criteria } : {}),
+      ...(detail?.score != null ? { score: detail.score } : {})
+    }
+    // Append to the per-note review log (best-effort; the in-session summary
+    // does not depend on this write succeeding).
+    try {
+      await window.zen.appendReviewGrade(notePath, grade)
+    } catch (err) {
+      console.error('appendReviewGrade failed', err)
+    }
+
+    set((st) => {
+      // Keep the in-memory index current so later passes/counts see the new SRS.
+      const nextIndex: CardIndex = {
+        ...st.studyIndex,
+        [cardId]: { ...entry, card: updatedCard }
+      }
+      // Re-queue an `again` card so it comes back before the session ends.
+      const queue = rating === 'again' ? [...st.studyQueue, cardId] : st.studyQueue
+      const cursor = st.studyCursor + 1
+      return {
+        studyIndex: nextIndex,
+        studyQueue: queue,
+        studyCursor: cursor,
+        studyPredicted: null,
+        studySessionGrades: [...st.studySessionGrades, grade],
+        studyPhase: cursor >= queue.length ? 'summary' : 'front'
+      }
+    })
+    // Live-update the dashboard (streak/goal/heatmap) when it's open behind the session.
+    if (allLeaves(get().paneLayout).some((l) => l.tabs.includes(STUDY_DASHBOARD_TAB_PATH))) {
+      void get().loadStudyStats()
+    }
+  },
+
+  endStudySession: () => {
+    const state = get()
+    for (const leaf of allLeaves(state.paneLayout)) {
+      for (const tab of leaf.tabs) {
+        if (isStudyTabPath(tab)) void get().closeTabInPane(leaf.id, tab)
+      }
+    }
+    set({
+      studyScope: null,
+      studyIndex: null,
+      studyQueue: [],
+      studyCursor: 0,
+      studyPhase: 'idle',
+      studyPredicted: null,
+      studySessionGrades: [],
+      studyError: null
+    })
+    // Studying changes the numbers the dashboard shows; refresh it if it's open.
+    if (allLeaves(get().paneLayout).some((l) => l.tabs.includes(STUDY_DASHBOARD_TAB_PATH))) {
+      void get().loadStudyStats()
+    }
+  },
+
+  openStudyDashboard: async () => {
+    await get().openNoteInPane(get().activePaneId, STUDY_DASHBOARD_TAB_PATH)
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    set({ focusedPanel: 'editor' })
+    await get().loadStudyStats()
+  },
+
+  loadStudyStats: async () => {
+    set({ studyStatsLoading: true, studyStatsError: null })
+    try {
+      // Read every deck (cards → concepts/SRS) and review log (grades → streak,
+      // heatmap, accuracy) — the same cross-deck read `startStudySession` uses.
+      const decks: FlashcardDeck[] = []
+      const cache = { ...get().flashcardDeckByNote }
+      const summaries = await window.zen.listFlashcardDecks()
+      for (const s of summaries) {
+        const deck = await window.zen.readFlashcards(s.sourceNotePath)
+        if (deck) {
+          decks.push(deck)
+          cache[s.sourceNotePath] = deck
+        }
+      }
+      const logs: ReviewLogFile[] = []
+      for (const s of summaries) {
+        try {
+          const log = await window.zen.readReviewLog(s.sourceNotePath)
+          if (log) logs.push(log)
+        } catch {
+          // a missing/corrupt log just means no recorded history for that note
+        }
+      }
+      const gamification = get().studyGamification ?? (await window.zen.readStudyGamification())
+      const stats = computeStudyStats(decks, logs, gamification, new Date())
+      set({
+        flashcardDeckByNote: cache,
+        studyGamification: gamification,
+        studyStats: stats,
+        studyStatsLoading: false
+      })
+    } catch (err) {
+      console.error('loadStudyStats failed', err)
+      set({
+        studyStatsLoading: false,
+        studyStatsError: err instanceof Error ? err.message : 'Could not load study stats.'
+      })
+    }
+  },
+
+  setStudyDailyGoal: async (goal) => {
+    const next = Math.max(1, Math.round(goal))
+    const base = get().studyGamification ?? DEFAULT_STUDY_GAMIFICATION
+    const optimistic: StudyGamification = { ...base, dailyGoal: next }
+    set({ studyGamification: optimistic })
+    // Recompute immediately so the ring reacts without waiting on the write.
+    if (get().studyStats) {
+      set({
+        studyStats: {
+          ...get().studyStats!,
+          dailyGoal: next,
+          goalMet: get().studyStats!.reviewsToday >= next
+        }
+      })
+    }
+    try {
+      const saved = await window.zen.writeStudyGamification(optimistic)
+      set({ studyGamification: saved })
+    } catch (err) {
+      console.error('setStudyDailyGoal failed', err)
     }
   },
 
