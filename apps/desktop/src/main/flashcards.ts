@@ -181,7 +181,7 @@ Return ONLY a raw JSON array of card objects — no prose, no markdown fences, n
   "back": <string, recall: the answer; synthesis: a model answer>,
   "concepts": [<1-3 short labels; concepts[0] is THE single focus concept>],
   "prerequisites": [<0-3 short concept labels needed first>],
-  "difficulty": <integer 1-5>,
+  "difficulty": <integer 1-5: 1 Trivial, 2 Easy, 3 Moderate, 4 Hard, 5 Very hard>,
   "sourceQuote": <optional verbatim span copied from the note>,
   "acceptableAnswers": [<recall ONLY, optional: extra strings that also count as correct>],
   "rubric": {                       // synthesis ONLY — REQUIRED for synthesis, OMIT for recall

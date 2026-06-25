@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import {
+  difficultyLabel,
   notePathFromFlashcardsTab,
   flashcardsTitleFromTab,
   type FlashcardDraft,
@@ -288,7 +289,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                       <div className="flex flex-wrap items-center gap-2">
                         <CardBadge draft={draft} />
                         <span className="rounded-full bg-paper-200/70 px-2 py-0.5 text-2xs font-medium text-ink-600">
-                          difficulty {draft.difficulty}
+                          {difficultyLabel(draft.difficulty)}
                         </span>
                         {draft.concepts[0] && (
                           <span className="rounded-full bg-amber-500/12 px-2 py-0.5 text-2xs font-medium text-amber-700">

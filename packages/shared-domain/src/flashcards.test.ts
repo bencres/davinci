@@ -3,6 +3,7 @@ import {
   buildCardIndex,
   checkRecallAnswer,
   deckPathForNote,
+  difficultyLabel,
   draftToCard,
   emptyDeck,
   flashcardsTabPath,
@@ -186,6 +187,19 @@ describe('buildCardIndex', () => {
     const index = buildCardIndex([deckA, deckB])
     expect(index['c1'].sourceNotePath).toBe('a.md')
     expect(index['c2'].sourceNotePath).toBe('b.md')
+  })
+})
+
+describe('difficultyLabel', () => {
+  it('maps 1–5 to labels and clamps out-of-range/fractional values', () => {
+    expect(difficultyLabel(1)).toBe('Trivial')
+    expect(difficultyLabel(2)).toBe('Easy')
+    expect(difficultyLabel(3)).toBe('Moderate')
+    expect(difficultyLabel(4)).toBe('Hard')
+    expect(difficultyLabel(5)).toBe('Very hard')
+    expect(difficultyLabel(0)).toBe('Trivial')
+    expect(difficultyLabel(9)).toBe('Very hard')
+    expect(difficultyLabel(3.4)).toBe('Moderate')
   })
 })
 
