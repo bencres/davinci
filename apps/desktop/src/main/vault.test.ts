@@ -71,6 +71,25 @@ describe('rootContentHiddenByInboxMode (#195)', () => {
   })
 })
 
+describe('vault settings flashcard model round-trip', () => {
+  it('persists a chosen flashcardModel through set + get', async () => {
+    const root = await makeTempDir('zennotes-vault-flashcard-')
+    await mkdir(root, { recursive: true })
+    const base = await getVaultSettings(root)
+    const saved = await setVaultSettings(root, { ...base, flashcardModel: 'claude-haiku-4-5' })
+    expect(saved.flashcardModel).toBe('claude-haiku-4-5')
+    const reread = await getVaultSettings(root)
+    expect(reread.flashcardModel).toBe('claude-haiku-4-5')
+  })
+
+  it('defaults flashcardModel when unset', async () => {
+    const root = await makeTempDir('zennotes-vault-flashcard-default-')
+    await mkdir(root, { recursive: true })
+    const settings = await getVaultSettings(root)
+    expect(settings.flashcardModel).toBe('claude-sonnet-4-6')
+  })
+})
+
 describe('absolutePath', () => {
   it('rejects sibling-prefix escapes outside the vault root', async () => {
     const parent = await makeTempDir('zennotes-vault-parent-')
