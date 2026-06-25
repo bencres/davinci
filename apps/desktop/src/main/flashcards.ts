@@ -341,6 +341,15 @@ const CARD_MIX_GUIDANCE: Record<FlashcardCardMix, string> = {
     'MIX: almost entirely synthesis cards (application, connection, critique, etc.); include recall cards only for the few facts strictly required to attempt them.'
 }
 
+/** How many related notes to include, and how much of each, for cross-note synthesis. */
+const MAX_RELATED_NOTES = 5
+const MAX_RELATED_NOTE_CHARS = 8000
+
+interface RelatedNote {
+  notePath: string
+  body: string
+}
+
 interface UserPromptParams {
   notePath: string
   body: string
@@ -350,6 +359,7 @@ interface UserPromptParams {
   maxCards: number
   instructions: string
   guidance: string
+  relatedNotes: RelatedNote[]
 }
 
 function buildUserPrompt(p: UserPromptParams): string {
@@ -358,6 +368,11 @@ function buildUserPrompt(p: UserPromptParams): string {
     CARD_MIX_GUIDANCE[p.cardMix] ?? CARD_MIX_GUIDANCE.balanced,
     `Produce AT MOST ${p.maxCards} cards this run.`
   ]
+  if (p.relatedNotes.length > 0) {
+    directives.push(
+      `CROSS-NOTE SYNTHESIS: in addition to cards about the primary note, generate synthesis cards that connect the primary note's concepts to the RELATED NOTES below. Each cross-note card's "concepts" should span both notes, and its "prerequisites" should name the connected concept(s). Only make such a card where a genuine, non-obvious connection exists — never force one.`
+    )
+  }
   if (p.guidance.trim()) {
     directives.push(
       `STANDING GUIDANCE (the learner's persistent preferences — honor unless a per-run instruction overrides, and never break the JSON shape or the card contract):\n${p.guidance.trim()}`
@@ -374,9 +389,16 @@ function buildUserPrompt(p: UserPromptParams): string {
       `ADDITIONAL INSTRUCTIONS FOR THIS RUN (these take precedence over the standing guidance, but never break the JSON shape or the card contract):\n${p.instructions.trim()}`
     )
   }
+  const related =
+    p.relatedNotes.length > 0
+      ? '\n\n' +
+        p.relatedNotes
+          .map((r) => `--- RELATED NOTE (${r.notePath}) ---\n${r.body}\n--- END RELATED NOTE ---`)
+          .join('\n\n')
+      : ''
   return `Generate study cards from the note below (vault path: ${p.notePath}).\n\n${directives.join(
     '\n'
-  )}\n\n--- NOTE START ---\n${p.body}\n--- NOTE END ---\n\nReturn the JSON array now.`
+  )}\n\n--- NOTE START ---\n${p.body}\n--- NOTE END ---${related}\n\nReturn the JSON array now.`
 }
 
 /** Extract the JSON array from a model response, tolerating stray prose/fences. */
@@ -417,12 +439,27 @@ export async function generateFlashcards(
     maxCards?: number
     instructions?: string
     guidance?: string
+    relatedNotePaths?: string[]
   } = {}
 ): Promise<GenerateFlashcardsResult> {
   const apiKey = await getAnthropicApiKey()
   if (!apiKey) throw new MissingAnthropicKeyError()
 
   const body = await fs.readFile(absolutePath(root, notePath), 'utf8')
+
+  // Cross-note synthesis: pull a few related notes as extra context (best-effort).
+  const relatedPaths = (opts.relatedNotePaths ?? [])
+    .filter((p) => typeof p === 'string' && p.trim() && p !== notePath)
+    .slice(0, MAX_RELATED_NOTES)
+  const relatedNotes: RelatedNote[] = []
+  for (const rp of relatedPaths) {
+    try {
+      const rb = await fs.readFile(absolutePath(root, rp), 'utf8')
+      relatedNotes.push({ notePath: rp, body: rb.slice(0, MAX_RELATED_NOTE_CHARS) })
+    } catch {
+      // a missing/unreadable related note is simply skipped
+    }
+  }
   const model = opts.model?.trim() || DEFAULT_FLASHCARD_MODEL
   const density = opts.density ?? DEFAULT_FLASHCARD_DENSITY
   const existing = (opts.existing ?? []).filter((s) => typeof s === 'string' && s.trim())
@@ -448,7 +485,8 @@ export async function generateFlashcards(
           cardMix,
           maxCards,
           instructions: opts.instructions ?? '',
-          guidance: opts.guidance ?? ''
+          guidance: opts.guidance ?? '',
+          relatedNotes
         })
       }
     ]

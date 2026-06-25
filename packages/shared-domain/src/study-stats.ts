@@ -9,7 +9,8 @@
  * from decks + logs + that config — never stored.
  */
 
-import type { Flashcard, FlashcardDeck, ReviewLogFile } from './flashcards'
+import type { Flashcard, FlashcardDeck, ReviewGrade, ReviewLogFile } from './flashcards'
+import { ratingToNumber } from './flashcards'
 import { isDue, isNew } from './srs'
 
 // ---------------------------------------------------------------------------
@@ -99,7 +100,23 @@ export interface StudyStats {
   heatmap: HeatmapDay[]
   /** Per-concept mastery, largest concepts first. */
   concepts: ConceptMastery[]
+  /** Predicted-vs-actual rating calibration over review history. */
+  calibration: CalibrationStats
 }
+
+/** How well a learner's pre-reveal prediction matched the actual self-grade. */
+export interface CalibrationStats {
+  sampleSize: number
+  /** Mean |predicted − actual| on the 1–4 scale (0 = perfectly calibrated). */
+  meanAbsError: number
+  /** Mean (predicted − actual): >0 over-confident, <0 under-confident. */
+  signedBias: number
+  /** Same metrics over the most recent `CALIBRATION_RECENT_WINDOW` reviews (trend). */
+  recent: { sampleSize: number; meanAbsError: number; signedBias: number }
+}
+
+/** Most-recent reviews used for the calibration "recent" trend window. */
+export const CALIBRATION_RECENT_WINDOW = 100
 
 /** Trailing days to render in the activity heatmap (53 weeks). */
 export const HEATMAP_DAYS = 371
@@ -193,6 +210,108 @@ function isMature(card: Flashcard): boolean {
   )
 }
 
+/**
+ * Normalized matching key for a free-text concept label (trim + lower-case) so
+ * authored variants like "Hash Maps" / " hash maps " collapse to one concept.
+ */
+export function conceptKey(label: string): string {
+  return label.trim().toLowerCase()
+}
+
+/**
+ * Per-concept mastery rollup across every deck + review log. Shared by the
+ * dashboard (`computeStudyStats`) and the concept graph (`buildConceptGraph`).
+ * Concepts are merged by `conceptKey` (first-seen label is kept for display).
+ * Accuracy is drawn from review history over ALL concepts a graded card carries;
+ * mastery is the mean per-card FSRS stability (0..100) over that concept's cards.
+ * Sorted largest concepts first (then alphabetical) for stable rendering.
+ */
+export function computeConceptMastery(
+  decks: FlashcardDeck[],
+  logs: ReviewLogFile[]
+): ConceptMastery[] {
+  const cardById = new Map<string, Flashcard>()
+  for (const deck of decks) for (const card of deck.cards) cardById.set(card.id, card)
+
+  // key → { graded, correct } from review history
+  const conceptGrades = new Map<string, { graded: number; correct: number }>()
+  for (const log of logs) {
+    for (const g of log.grades) {
+      const card = cardById.get(g.cardId)
+      if (!card) continue
+      const correct = isCorrect(g.rating)
+      for (const concept of card.concepts) {
+        const key = conceptKey(concept)
+        if (!key) continue
+        const acc = conceptGrades.get(key) ?? { graded: 0, correct: 0 }
+        acc.graded++
+        if (correct) acc.correct++
+        conceptGrades.set(key, acc)
+      }
+    }
+  }
+
+  // key → { first-seen display label, cards, notes }
+  const byKey = new Map<string, { label: string; cards: Flashcard[]; notes: Set<string> }>()
+  for (const deck of decks) {
+    for (const card of deck.cards) {
+      for (const concept of card.concepts) {
+        const key = conceptKey(concept)
+        if (!key) continue
+        const entry = byKey.get(key) ?? { label: concept.trim(), cards: [], notes: new Set<string>() }
+        entry.cards.push(card)
+        entry.notes.add(deck.sourceNotePath)
+        byKey.set(key, entry)
+      }
+    }
+  }
+
+  return [...byKey.entries()]
+    .map(([key, { label, cards, notes }]) => {
+      const grades = conceptGrades.get(key)
+      const masterySum = cards.reduce((sum, c) => sum + cardMastery(c), 0)
+      return {
+        concept: label,
+        total: cards.length,
+        mature: cards.filter(isMature).length,
+        accuracy: grades && grades.graded > 0 ? grades.correct / grades.graded : 0,
+        masteryPct: cards.length > 0 ? Math.round((masterySum / cards.length) * 100) : 0,
+        notePaths: [...notes]
+      }
+    })
+    .sort((a, b) => b.total - a.total || a.concept.localeCompare(b.concept))
+}
+
+/**
+ * Predicted-vs-actual calibration across review grades. Each grade records the
+ * learner's pre-reveal `predictedRating` and the actual `rating`; this measures
+ * how close they were (mean absolute error) and which way they lean (signed
+ * bias), overall and over the most recent window. Pure and order-independent —
+ * grades are sorted by `reviewedAt` internally so the "recent" slice is correct.
+ */
+export function computeCalibration(grades: ReviewGrade[]): CalibrationStats {
+  const rows = grades
+    .map((g) => ({
+      at: Date.parse(g.reviewedAt),
+      diff: ratingToNumber(g.predictedRating) - ratingToNumber(g.rating)
+    }))
+    .filter((r) => Number.isFinite(r.at) && Number.isFinite(r.diff))
+    .sort((a, b) => a.at - b.at)
+
+  const summarize = (rs: { diff: number }[]): { sampleSize: number; meanAbsError: number; signedBias: number } => {
+    if (rs.length === 0) return { sampleSize: 0, meanAbsError: 0, signedBias: 0 }
+    let abs = 0
+    let signed = 0
+    for (const r of rs) {
+      abs += Math.abs(r.diff)
+      signed += r.diff
+    }
+    return { sampleSize: rs.length, meanAbsError: abs / rs.length, signedBias: signed / rs.length }
+  }
+
+  return { ...summarize(rows), recent: summarize(rows.slice(-CALIBRATION_RECENT_WINDOW)) }
+}
+
 /** Aggregate every deck + review log (plus the persisted config) into dashboard stats. */
 export function computeStudyStats(
   decks: FlashcardDeck[],
@@ -204,8 +323,6 @@ export function computeStudyStats(
   const todayKey = localDateKey(now)
 
   // --- Card-level rollups ---
-  const cardById = new Map<string, Flashcard>()
-  const noteByCardId = new Map<string, string>()
   let totalCards = 0
   let dueToday = 0
   let newAvailable = 0
@@ -213,20 +330,16 @@ export function computeStudyStats(
   for (const deck of decks) {
     for (const card of deck.cards) {
       totalCards++
-      cardById.set(card.id, card)
-      noteByCardId.set(card.id, deck.sourceNotePath)
       if (isNew(card.srs)) newAvailable++
       else if (isDue(card.srs, nowMs)) dueToday++
       if (isMature(card)) matureCards++
     }
   }
 
-  // --- Review-log rollups (heatmap, streak, retention, per-concept accuracy) ---
+  // --- Review-log rollups (heatmap, streak, retention) ---
   const countsByDay = new Map<string, number>()
   let totalReviews = 0
   let correctReviews = 0
-  // concept → { graded, correct } from review history
-  const conceptGrades = new Map<string, { graded: number; correct: number }>()
   for (const log of logs) {
     for (const g of log.grades) {
       const t = new Date(g.reviewedAt)
@@ -234,17 +347,7 @@ export function computeStudyStats(
       const key = localDateKey(t)
       countsByDay.set(key, (countsByDay.get(key) ?? 0) + 1)
       totalReviews++
-      const correct = isCorrect(g.rating)
-      if (correct) correctReviews++
-      const card = cardById.get(g.cardId)
-      if (card) {
-        for (const concept of card.concepts) {
-          const acc = conceptGrades.get(concept) ?? { graded: 0, correct: 0 }
-          acc.graded++
-          if (correct) acc.correct++
-          conceptGrades.set(concept, acc)
-        }
-      }
+      if (isCorrect(g.rating)) correctReviews++
     }
   }
 
@@ -262,35 +365,8 @@ export function computeStudyStats(
     heatmap.push({ date: key, count: countsByDay.get(key) ?? 0 })
   }
 
-  // --- Per-concept mastery ---
-  const conceptCards = new Map<string, Flashcard[]>()
-  const conceptNotes = new Map<string, Set<string>>()
-  for (const deck of decks) {
-    for (const card of deck.cards) {
-      for (const concept of card.concepts) {
-        const list = conceptCards.get(concept) ?? []
-        list.push(card)
-        conceptCards.set(concept, list)
-        const notes = conceptNotes.get(concept) ?? new Set<string>()
-        notes.add(deck.sourceNotePath)
-        conceptNotes.set(concept, notes)
-      }
-    }
-  }
-  const concepts: ConceptMastery[] = [...conceptCards.entries()]
-    .map(([concept, cards]) => {
-      const grades = conceptGrades.get(concept)
-      const masterySum = cards.reduce((sum, c) => sum + cardMastery(c), 0)
-      return {
-        concept,
-        total: cards.length,
-        mature: cards.filter(isMature).length,
-        accuracy: grades && grades.graded > 0 ? grades.correct / grades.graded : 0,
-        masteryPct: cards.length > 0 ? Math.round((masterySum / cards.length) * 100) : 0,
-        notePaths: [...(conceptNotes.get(concept) ?? [])]
-      }
-    })
-    .sort((a, b) => b.total - a.total || a.concept.localeCompare(b.concept))
+  // --- Per-concept mastery (shared with the concept graph) ---
+  const concepts = computeConceptMastery(decks, logs)
 
   return {
     reviewsToday,
@@ -305,6 +381,7 @@ export function computeStudyStats(
     retentionRate: totalReviews > 0 ? correctReviews / totalReviews : 0,
     totalReviews,
     heatmap,
-    concepts
+    concepts,
+    calibration: computeCalibration(logs.flatMap((l) => l.grades))
   }
 }

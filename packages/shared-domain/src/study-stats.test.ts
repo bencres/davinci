@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { Flashcard, FlashcardDeck, ReviewGrade, ReviewLogFile, SrsState } from './flashcards'
 import { FLASHCARD_STORE_VERSION, REVIEW_LOG_VERSION } from './flashcards'
 import {
+  CALIBRATION_RECENT_WINDOW,
+  computeCalibration,
   computeCurrentStreak,
   computeLongestStreak,
   computeStudyStats,
@@ -188,5 +190,62 @@ describe('computeStudyStats', () => {
     expect(trees.notePaths).toEqual(['a.md'])
     // Sorted by total desc → Trees (2) before Graphs (1)
     expect(stats.concepts[0].concept).toBe('Trees')
+  })
+})
+
+describe('computeCalibration', () => {
+  const cal = (
+    predicted: ReviewGrade['predictedRating'],
+    rating: ReviewGrade['rating'],
+    at: string
+  ): ReviewGrade => ({ cardId: 'c', reviewedAt: at, predictedRating: predicted, rating })
+
+  it('is zeroed with no grades', () => {
+    expect(computeCalibration([])).toEqual({
+      sampleSize: 0,
+      meanAbsError: 0,
+      signedBias: 0,
+      recent: { sampleSize: 0, meanAbsError: 0, signedBias: 0 }
+    })
+  })
+
+  it('measures over-confidence as a positive signed bias', () => {
+    // Predicted easy(4) but actually again(1) twice → diff +3 each.
+    const grades = [
+      cal('easy', 'again', '2026-06-01T09:00:00.000Z'),
+      cal('easy', 'again', '2026-06-02T09:00:00.000Z')
+    ]
+    const c = computeCalibration(grades)
+    expect(c.sampleSize).toBe(2)
+    expect(c.meanAbsError).toBeCloseTo(3)
+    expect(c.signedBias).toBeCloseTo(3)
+  })
+
+  it('measures under-confidence as a negative signed bias', () => {
+    const c = computeCalibration([cal('again', 'good', '2026-06-01T09:00:00.000Z')]) // 1 - 3 = -2
+    expect(c.signedBias).toBeCloseTo(-2)
+    expect(c.meanAbsError).toBeCloseTo(2)
+  })
+
+  it('recent window covers only the most recent reviews, sorted by time', () => {
+    // Oldest grades are perfectly calibrated; the newest window+ are over-confident.
+    const grades: ReviewGrade[] = []
+    for (let i = 0; i < 10; i++) {
+      grades.push(cal('good', 'good', `2026-05-${String(i + 1).padStart(2, '0')}T09:00:00.000Z`))
+    }
+    for (let i = 0; i < CALIBRATION_RECENT_WINDOW; i++) {
+      grades.push(cal('easy', 'hard', `2026-07-${String((i % 28) + 1).padStart(2, '0')}T${String(i % 24).padStart(2, '0')}:00:00.000Z`))
+    }
+    const c = computeCalibration(grades)
+    expect(c.sampleSize).toBe(10 + CALIBRATION_RECENT_WINDOW)
+    expect(c.recent.sampleSize).toBe(CALIBRATION_RECENT_WINDOW)
+    // Recent slice is all easy(4)→hard(2) = +2; overall is diluted by the 10 perfect.
+    expect(c.recent.signedBias).toBeCloseTo(2)
+    expect(c.signedBias).toBeLessThan(2)
+  })
+
+  it('drops grades with unparseable timestamps', () => {
+    const c = computeCalibration([cal('good', 'good', 'not-a-date'), cal('easy', 'again', '2026-06-01T09:00:00.000Z')])
+    expect(c.sampleSize).toBe(1)
   })
 })

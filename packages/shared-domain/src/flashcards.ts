@@ -65,6 +65,19 @@ export const SYNTHESIS_SUBTYPES: readonly SynthesisSubtype[] = [
 /** The FSRS rating every review funnels to (1 | 2 | 3 | 4). */
 export type FsrsRating = 'again' | 'hard' | 'good' | 'easy'
 
+/** Numeric value of each rating on the 1–4 scale (calibration math, sorting). */
+export const FSRS_RATING_VALUE: Record<FsrsRating, number> = {
+  again: 1,
+  hard: 2,
+  good: 3,
+  easy: 4
+}
+
+/** The 1–4 numeric value for an FSRS rating (NaN for an unknown/missing rating). */
+export function ratingToNumber(rating: FsrsRating): number {
+  return FSRS_RATING_VALUE[rating] ?? NaN
+}
+
 /**
  * Human-readable labels for the 1–4 card-difficulty scale (the author/learner's
  * sense of how hard the card is, distinct from FSRS difficulty). Shown in the
@@ -363,6 +376,14 @@ export const STUDY_DASHBOARD_TAB_PATH = 'zen://dashboard'
 /** True for the study dashboard tab. */
 export function isStudyDashboardTabPath(path: string | null | undefined): boolean {
   return path === STUDY_DASHBOARD_TAB_PATH
+}
+
+/** Virtual tab path for the vault-wide concept (knowledge) graph. */
+export const CONCEPT_GRAPH_TAB_PATH = 'zen://concept-graph'
+
+/** True for the concept-graph tab. */
+export function isConceptGraphTabPath(path: string | null | undefined): boolean {
+  return path === CONCEPT_GRAPH_TAB_PATH
 }
 
 // ---------------------------------------------------------------------------

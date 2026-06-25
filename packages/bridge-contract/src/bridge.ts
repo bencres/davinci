@@ -94,6 +94,12 @@ export interface GenerateOptions {
   cardMix?: FlashcardCardMix
   /** Soft target for the number of cards (still clamped to the hard per-run cap). */
   maxCards?: number
+  /**
+   * Vault-relative paths of related notes (e.g. wiki-linked) whose content is
+   * added as extra context for CROSS-NOTE SYNTHESIS — cards that connect the
+   * primary note's concepts to these. Empty/omitted = single-note generation.
+   */
+  relatedNotePaths?: string[]
 }
 
 /** Result of a flashcard-generation request: validated drafts + drop count. */

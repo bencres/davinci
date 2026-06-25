@@ -198,6 +198,121 @@ export function selectDueQueue(index: CardIndex, opts: DueQueueOptions = {}): st
   ]
 }
 
+// ---------------------------------------------------------------------------
+// Session shaping (pure): warm-up, interleaving, cooldown.
+// ---------------------------------------------------------------------------
+
+export interface SessionShapeOptions {
+  /** Easy cards to front-load for momentum (default 2). */
+  warmupCount?: number
+  /** Easy cards to reserve for the end (default 2). */
+  cooldownCount?: number
+  /** Spread consecutive cards across different focus concepts (default true). */
+  interleave?: boolean
+}
+
+const DEFAULT_WARMUP = 2
+const DEFAULT_COOLDOWN = 2
+
+/** Easier cards first: lower card difficulty, then higher FSRS stability. */
+function easeCompare(a: Flashcard | undefined, b: Flashcard | undefined): number {
+  const da = a?.difficulty ?? 2
+  const db = b?.difficulty ?? 2
+  if (da !== db) return da - db
+  return (b?.srs.stability ?? 0) - (a?.srs.stability ?? 0)
+}
+
+/** Normalized focus concept (concepts[0]) used to spread cards during interleaving. */
+function focusConceptKey(card: Flashcard | undefined): string {
+  return (card?.concepts[0] ?? '').trim().toLowerCase()
+}
+
+/**
+ * Reorder so consecutive cards avoid the same focus concept where possible.
+ * Greedy: repeatedly take from the largest remaining concept bucket whose key
+ * differs from the previous pick (falling back to the only bucket left).
+ * Deterministic — buckets keep first-seen insertion order to break ties.
+ */
+function interleaveByConcept(ids: string[], cardOf: (id: string) => Flashcard | undefined): string[] {
+  if (ids.length <= 2) return ids
+  const buckets = new Map<string, string[]>()
+  for (const id of ids) {
+    const k = focusConceptKey(cardOf(id))
+    const b = buckets.get(k)
+    if (b) b.push(id)
+    else buckets.set(k, [id])
+  }
+  if (buckets.size <= 1) return ids
+
+  const result: string[] = []
+  let lastKey: string | null = null
+  for (let n = ids.length; n > 0; n--) {
+    let chosen: string | null = null
+    let best = -1
+    for (const [k, b] of buckets) {
+      if (b.length === 0 || k === lastKey) continue
+      if (b.length > best) {
+        best = b.length
+        chosen = k
+      }
+    }
+    if (chosen == null) {
+      for (const [k, b] of buckets) {
+        if (b.length > 0) {
+          chosen = k
+          break
+        }
+      }
+    }
+    if (chosen == null) break
+    result.push(buckets.get(chosen)!.shift()!)
+    lastKey = chosen
+  }
+  return result
+}
+
+/**
+ * Shape a due queue (from `selectDueQueue`) into a session: due learning/
+ * relearning cards stay first (time-sensitive), then an easy warm-up, then the
+ * harder middle interleaved across concepts, then an easy cool-down to finish
+ * on confidence. Falls back to a plain (optionally interleaved) order when the
+ * queue is too small to sandwich.
+ */
+export function shapeSession(
+  orderedIds: string[],
+  index: CardIndex,
+  opts: SessionShapeOptions = {}
+): string[] {
+  const warmupCount = Math.max(0, opts.warmupCount ?? DEFAULT_WARMUP)
+  const cooldownCount = Math.max(0, opts.cooldownCount ?? DEFAULT_COOLDOWN)
+  const interleave = opts.interleave ?? true
+  const cardOf = (id: string): Flashcard | undefined => index[id]?.card
+
+  // Lead: due learning/relearning cards stay first, in their given order.
+  const lead: string[] = []
+  const rest: string[] = []
+  for (const id of orderedIds) {
+    const st = cardOf(id)?.srs.state
+    if (st === 'learning' || st === 'relearning') lead.push(id)
+    else rest.push(id)
+  }
+
+  // Too small to sandwich a distinct middle → just (optionally) interleave.
+  if (rest.length < warmupCount + cooldownCount + 2) {
+    return [...lead, ...(interleave ? interleaveByConcept(rest, cardOf) : rest)]
+  }
+
+  // Pick the easiest cards for the warm-up and cool-down ends.
+  const byEase = [...rest].sort((a, b) => easeCompare(cardOf(a), cardOf(b)))
+  const warmup = byEase.slice(0, warmupCount)
+  const cooldown = byEase.slice(warmupCount, warmupCount + cooldownCount)
+  const picked = new Set([...warmup, ...cooldown])
+  const middleIds = rest.filter((id) => !picked.has(id)) // preserve due order
+  const middle = interleave ? interleaveByConcept(middleIds, cardOf) : middleIds
+
+  return [...lead, ...warmup, ...middle, ...cooldown]
+}
+
 /** Split the index into never-scheduled vs currently-due ids (for summaries/counts). */
 export function splitNewVsReview(
   index: CardIndex,

@@ -6,6 +6,7 @@ import {
   isDue,
   isNew,
   selectDueQueue,
+  shapeSession,
   splitNewVsReview,
   srsToFsrsCard,
   type CardIndex
@@ -130,6 +131,73 @@ describe('selectDueQueue', () => {
     ]
     const q = selectDueQueue(index(cards), { now: NOW, maxReviewsPerDay: 1 })
     expect(q).toEqual(['l1', 'r1']) // relearning always in; reviews capped to 1
+  })
+})
+
+describe('shapeSession', () => {
+  /** Flashcard with controllable difficulty / concept / srs state for shaping. */
+  function mk(
+    id: string,
+    opts: { difficulty?: 1 | 2 | 3 | 4; concepts?: string[]; state?: SrsState['state']; stability?: number } = {}
+  ): Flashcard {
+    return {
+      ...card(id, reviewSrs({ state: opts.state ?? 'review', stability: opts.stability ?? 10 })),
+      concepts: opts.concepts ?? ['c'],
+      difficulty: opts.difficulty ?? 2
+    }
+  }
+
+  it('sandwiches: easy warm-up first, hardest in the middle, easy cool-down last', () => {
+    // Same concept everywhere so interleaving is a no-op and order is exact.
+    const cards = [
+      mk('a', { difficulty: 4 }),
+      mk('b', { difficulty: 4 }),
+      mk('c', { difficulty: 1 }),
+      mk('d', { difficulty: 1 }),
+      mk('e', { difficulty: 2 }),
+      mk('f', { difficulty: 3 })
+    ]
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f']
+    const out = shapeSession(ids, index(cards))
+    expect(out).toEqual(['c', 'd', 'a', 'b', 'e', 'f'])
+    // warm-up = the two easiest, cool-down = next easiest, middle = hardest.
+    expect(out.slice(0, 2)).toEqual(['c', 'd'])
+    expect(out.slice(-2)).toEqual(['e', 'f'])
+    expect([...out].sort()).toEqual([...ids].sort()) // permutation
+  })
+
+  it('keeps due learning/relearning cards first', () => {
+    const cards = [
+      mk('L', { state: 'learning', difficulty: 4 }),
+      mk('a', { difficulty: 1 }),
+      mk('b', { difficulty: 1 }),
+      mk('c', { difficulty: 2 }),
+      mk('d', { difficulty: 3 }),
+      mk('e', { difficulty: 3 }),
+      mk('f', { difficulty: 4 })
+    ]
+    const out = shapeSession(['L', 'a', 'b', 'c', 'd', 'e', 'f'], index(cards))
+    expect(out[0]).toBe('L')
+  })
+
+  it('interleaves so consecutive cards avoid the same focus concept', () => {
+    const cards = [
+      mk('x1', { concepts: ['X'] }),
+      mk('x2', { concepts: ['X'] }),
+      mk('y1', { concepts: ['Y'] }),
+      mk('y2', { concepts: ['Y'] })
+    ]
+    const out = shapeSession(['x1', 'x2', 'y1', 'y2'], index(cards), { warmupCount: 0, cooldownCount: 0 })
+    const conceptOf = (id: string): string => cards.find((c) => c.id === id)!.concepts[0]
+    for (let i = 0; i < out.length - 1; i++) {
+      expect(conceptOf(out[i])).not.toBe(conceptOf(out[i + 1]))
+    }
+  })
+
+  it('leaves a too-small queue as a permutation (no sandwich)', () => {
+    const cards = [mk('a'), mk('b'), mk('c')]
+    const out = shapeSession(['a', 'b', 'c'], index(cards))
+    expect([...out].sort()).toEqual(['a', 'b', 'c'])
   })
 })
 
