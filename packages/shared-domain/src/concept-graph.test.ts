@@ -159,6 +159,22 @@ describe('buildConceptGraph', () => {
     expect(g.nodes.find((n) => n.key === 'basics')!.isGap).toBe(false)
   })
 
+  it('keeps prerequisite edges distinct when concept labels contain spaces', () => {
+    // A naive `${from} ${to}` dedup key would collapse these two distinct edges.
+    const g = buildConceptGraph(
+      [
+        deck('n.md', [
+          card({ concepts: ['c'], prerequisites: ['a b'] }),
+          card({ concepts: ['b c'], prerequisites: ['a'] })
+        ])
+      ],
+      []
+    )
+    expect(g.edges).toContainEqual({ from: 'a b', to: 'c' })
+    expect(g.edges).toContainEqual({ from: 'a', to: 'b c' })
+    expect(g.edges).toHaveLength(2)
+  })
+
   it('uses review history for concept accuracy', () => {
     const c = card({ id: 'g1', concepts: ['Graphs'] })
     const g = buildConceptGraph(
