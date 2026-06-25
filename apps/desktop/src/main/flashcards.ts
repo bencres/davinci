@@ -51,9 +51,9 @@ const DENSITY_GUIDANCE: Record<FlashcardDensity, string> = {
   concise:
     'DENSITY: concise. Test ONLY the most essential, load-bearing concepts. A handful of high-value cards is the goal — skip secondary detail.',
   balanced:
-    'DENSITY: balanced. Cover each key concept once, adding a synthesis card only where transfer is genuinely valuable.',
+    'DENSITY: balanced. Cover each key concept once, with a synthesis card wherever the concept supports meaningful transfer.',
   thorough:
-    'DENSITY: thorough. Cover every distinct concept in the note, pairing recall with synthesis where it aids transfer — but still no padding.'
+    'DENSITY: thorough. Cover every distinct concept in the note, pairing recall with synthesis to push transfer — but still no padding.'
 }
 
 /** Typed error the renderer maps to a "Set your key in Settings" prompt. */
@@ -201,7 +201,7 @@ Return ONLY a raw JSON array of card objects — no prose, no markdown fences, n
   "back": <string, recall: the answer; synthesis: a model answer>,
   "concepts": [<1-3 short labels; concepts[0] is THE single focus concept>],
   "prerequisites": [<0-3 short concept labels needed first>],
-  "difficulty": <integer 1-5: 1 Trivial, 2 Easy, 3 Moderate, 4 Hard, 5 Very hard>,
+  "difficulty": <integer 1-4: 1 Easy, 2 Moderate, 3 Hard, 4 Very hard>,
   "sourceQuote": <optional verbatim span copied from the note>,
   "acceptableAnswers": [<recall ONLY, optional: extra strings that also count as correct>],
   "rubric": {                       // synthesis ONLY — REQUIRED for synthesis, OMIT for recall
@@ -223,7 +223,7 @@ RECALL kinds test material EXPLICIT in the note, graded deterministically. Subty
 - sequence: order of steps/events ("What step immediately follows '{step}'?").
 - causeEffect: one directional causal link ("What is the effect of {cause}?").
 
-SYNTHESIS kinds connect the note to scenarios, other notes, or the real world. Open-ended; graded against the rubric. Subtypes:
+SYNTHESIS kinds connect the note to scenarios, other notes, or the real world. Open-ended; graded against the rubric. A synthesis card must demand genuine TRANSFER — never a restatement of the note. Force the learner to do real work: apply the idea to a NOVEL scenario, weigh trade-offs, expose hidden assumptions / failure modes / edge cases, or explain WHY rather than WHAT. Aim for expert-level depth — these are the hard, high-value cards. Subtypes:
 - application: apply the concept to a NEW concrete scenario (not from the note).
 - connection: link this concept to another note/domain.
 - contradiction: resolve an apparent tension between two ideas.
@@ -232,14 +232,19 @@ SYNTHESIS kinds connect the note to scenarios, other notes, or the real world. O
 - prediction: a counterfactual / forward inference ("What happens to {system} if {variable} changes? Why?").
 - exampleGen: the learner supplies their own instance of the concept.
 
-CONTRACT (cards violating it are dropped): a subtype must match its kind; recall cards have a concrete back and NO rubric; every synthesis card MUST carry a valid rubric (>=1 criterion with non-empty description + positive weight, plus a non-empty modelAnswer). Favor a SPREAD of subtypes over a pile of cued cards — variety is a desirable difficulty. Aim for a balance of recall and synthesis cards.`
+DIFFICULTY: bias hard on purpose. Most cards should be 2-4 (Moderate to Very hard), and synthesis cards typically 3-4. Do NOT produce easy restating or vocabulary-drill cards — if a card would be trivial, either sharpen it into a real challenge or drop it.
+
+MIX: synthesis is the main event. Default to roughly 70% synthesis / 30% recall — emit recall cards only for the essential facts a learner must hold in memory before they can reason. (A note may justify a different split, but lean synthesis unless told otherwise.)
+
+CONTRACT (cards violating it are dropped): a subtype must match its kind; recall cards have a concrete back and NO rubric; every synthesis card MUST carry a valid rubric (>=1 criterion with non-empty description + positive weight, plus a non-empty modelAnswer). Favor a SPREAD of subtypes over a pile of cued cards — variety is a desirable difficulty.`
 
 const CARD_MIX_GUIDANCE: Record<FlashcardCardMix, string> = {
-  balanced: 'MIX: aim for a balance of recall and synthesis cards.',
+  balanced:
+    'MIX: lean synthesis — roughly 70% synthesis / 30% recall. Synthesis is the main event; include recall cards only for the essential facts a learner must hold before they can reason.',
   recall:
     'MIX: favor recall cards (direct retrieval of material in the note); include a synthesis card only where transfer is clearly valuable.',
   synthesis:
-    'MIX: favor synthesis cards (application, connection, critique, etc.); include recall cards only for the essential underlying facts.'
+    'MIX: almost entirely synthesis cards (application, connection, critique, etc.); include recall cards only for the few facts strictly required to attempt them.'
 }
 
 interface UserPromptParams {
@@ -250,6 +255,7 @@ interface UserPromptParams {
   cardMix: FlashcardCardMix
   maxCards: number
   instructions: string
+  guidance: string
 }
 
 function buildUserPrompt(p: UserPromptParams): string {
@@ -258,6 +264,11 @@ function buildUserPrompt(p: UserPromptParams): string {
     CARD_MIX_GUIDANCE[p.cardMix] ?? CARD_MIX_GUIDANCE.balanced,
     `Produce AT MOST ${p.maxCards} cards this run.`
   ]
+  if (p.guidance.trim()) {
+    directives.push(
+      `STANDING GUIDANCE (the learner's persistent preferences — honor unless a per-run instruction overrides, and never break the JSON shape or the card contract):\n${p.guidance.trim()}`
+    )
+  }
   if (p.existing.length > 0) {
     const list = p.existing.slice(0, 60).map((s) => `- ${s}`).join('\n')
     directives.push(
@@ -266,7 +277,7 @@ function buildUserPrompt(p: UserPromptParams): string {
   }
   if (p.instructions.trim()) {
     directives.push(
-      `ADDITIONAL INSTRUCTIONS FROM THE USER (follow these, but never break the JSON shape or the card contract):\n${p.instructions.trim()}`
+      `ADDITIONAL INSTRUCTIONS FOR THIS RUN (these take precedence over the standing guidance, but never break the JSON shape or the card contract):\n${p.instructions.trim()}`
     )
   }
   return `Generate study cards from the note below (vault path: ${p.notePath}).\n\n${directives.join(
@@ -311,6 +322,7 @@ export async function generateFlashcards(
     cardMix?: FlashcardCardMix
     maxCards?: number
     instructions?: string
+    guidance?: string
   } = {}
 ): Promise<GenerateFlashcardsResult> {
   const apiKey = await getAnthropicApiKey()
@@ -341,7 +353,8 @@ export async function generateFlashcards(
           existing,
           cardMix,
           maxCards,
-          instructions: opts.instructions ?? ''
+          instructions: opts.instructions ?? '',
+          guidance: opts.guidance ?? ''
         })
       }
     ]

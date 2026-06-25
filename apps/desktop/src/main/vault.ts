@@ -20,6 +20,7 @@ import {
   DEFAULT_WEEKLY_NOTES_DIRECTORY,
   DEFAULT_FLASHCARD_MODEL,
   DEFAULT_FLASHCARD_DENSITY,
+  DEFAULT_FLASHCARD_GUIDANCE,
   type FlashcardDensity,
   AssetMeta,
   DeletedAsset,
@@ -200,7 +201,8 @@ const DEFAULT_VAULT_SETTINGS: VaultSettings = {
   folderColors: {},
   favorites: [],
   flashcardModel: DEFAULT_FLASHCARD_MODEL,
-  flashcardDensity: DEFAULT_FLASHCARD_DENSITY
+  flashcardDensity: DEFAULT_FLASHCARD_DENSITY,
+  flashcardGuidance: DEFAULT_FLASHCARD_GUIDANCE
 }
 
 interface VaultTextSearchCandidate {
@@ -756,7 +758,8 @@ function cloneVaultSettings(settings: VaultSettings): VaultSettings {
     folderColors: { ...settings.folderColors },
     favorites: [...settings.favorites],
     flashcardModel: settings.flashcardModel,
-    flashcardDensity: settings.flashcardDensity
+    flashcardDensity: settings.flashcardDensity,
+    flashcardGuidance: settings.flashcardGuidance
   }
 }
 
@@ -764,6 +767,12 @@ function normalizeFlashcardModel(value: unknown): string {
   if (typeof value !== 'string') return DEFAULT_FLASHCARD_MODEL
   const trimmed = value.trim()
   return trimmed || DEFAULT_FLASHCARD_MODEL
+}
+
+function normalizeFlashcardGuidance(value: unknown): string {
+  if (typeof value !== 'string') return DEFAULT_FLASHCARD_GUIDANCE
+  // An empty string is a valid, intentional "no standing guidance" choice.
+  return value.trim() ? value : ''
 }
 
 const FLASHCARD_DENSITIES: readonly FlashcardDensity[] = ['concise', 'balanced', 'thorough']
@@ -882,7 +891,8 @@ function normalizeVaultSettings(
       folderColors: {},
       favorites: [],
       flashcardModel: DEFAULT_FLASHCARD_MODEL,
-      flashcardDensity: DEFAULT_FLASHCARD_DENSITY
+      flashcardDensity: DEFAULT_FLASHCARD_DENSITY,
+      flashcardGuidance: DEFAULT_FLASHCARD_GUIDANCE
     }
   }
   const candidate = value as {
@@ -908,6 +918,7 @@ function normalizeVaultSettings(
     favorites?: unknown
     flashcardModel?: unknown
     flashcardDensity?: unknown
+    flashcardGuidance?: unknown
   }
   const folderIcons: Record<string, FolderIconId> = {}
   if (candidate.folderIcons && typeof candidate.folderIcons === 'object') {
@@ -946,7 +957,8 @@ function normalizeVaultSettings(
     folderColors: normalizeFolderColors(candidate.folderColors),
     favorites: normalizeFavorites(candidate.favorites),
     flashcardModel: normalizeFlashcardModel(candidate.flashcardModel),
-    flashcardDensity: normalizeFlashcardDensity(candidate.flashcardDensity)
+    flashcardDensity: normalizeFlashcardDensity(candidate.flashcardDensity),
+    flashcardGuidance: normalizeFlashcardGuidance(candidate.flashcardGuidance)
   }
 }
 

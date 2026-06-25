@@ -29,6 +29,7 @@ import {
   unarchiveNote,
   writeNote
 } from './vault'
+import { DEFAULT_FLASHCARD_GUIDANCE } from '@shared/ipc'
 
 const tempDirs: string[] = []
 
@@ -100,6 +101,23 @@ describe('vault settings flashcard model round-trip', () => {
       flashcardDensity: 'bogus' as never
     })
     expect(saved.flashcardDensity).toBe('balanced')
+  })
+
+  it('persists custom flashcardGuidance, defaults when unset, and keeps an explicit empty', async () => {
+    const root = await makeTempDir('zennotes-vault-flashcard-guidance-')
+    await mkdir(root, { recursive: true })
+    // Unset → seeded with the default guidance (non-empty).
+    const base = await getVaultSettings(root)
+    expect(base.flashcardGuidance).toBe(DEFAULT_FLASHCARD_GUIDANCE)
+    // A custom string round-trips verbatim.
+    const custom = 'Focus on database internals; ask interview-style questions.'
+    const saved = await setVaultSettings(root, { ...base, flashcardGuidance: custom })
+    expect(saved.flashcardGuidance).toBe(custom)
+    expect((await getVaultSettings(root)).flashcardGuidance).toBe(custom)
+    // An explicit empty string is preserved (a deliberate "no standing guidance").
+    const cleared = await setVaultSettings(root, { ...base, flashcardGuidance: '' })
+    expect(cleared.flashcardGuidance).toBe('')
+    expect((await getVaultSettings(root)).flashcardGuidance).toBe('')
   })
 })
 

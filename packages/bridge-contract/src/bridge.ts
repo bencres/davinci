@@ -82,6 +82,11 @@ export interface GenerateOptions {
   existing?: string[]
   /** Free-text steering appended to the prompt (custom generation). */
   instructions?: string
+  /**
+   * Persistent generation guidance from vault settings (`flashcardGuidance`).
+   * Applied to every run, separate from the one-off `instructions`.
+   */
+  guidance?: string
   /** Bias toward recall or synthesis cards; defaults to balanced. */
   cardMix?: FlashcardCardMix
   /** Soft target for the number of cards (still clamped to the hard per-run cap). */

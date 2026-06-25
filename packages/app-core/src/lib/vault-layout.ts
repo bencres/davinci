@@ -8,6 +8,7 @@ import {
   DEFAULT_VAULT_SETTINGS,
   DEFAULT_FLASHCARD_MODEL,
   DEFAULT_FLASHCARD_DENSITY,
+  DEFAULT_FLASHCARD_GUIDANCE,
   type FlashcardDensity,
   type AssetMeta,
   type DateNotePatternSettings,
@@ -537,7 +538,12 @@ export function normalizeVaultSettings(
       typeof settings?.flashcardModel === 'string' && settings.flashcardModel.trim()
         ? settings.flashcardModel.trim()
         : DEFAULT_FLASHCARD_MODEL,
-    flashcardDensity: normalizeFlashcardDensity(settings?.flashcardDensity)
+    flashcardDensity: normalizeFlashcardDensity(settings?.flashcardDensity),
+    // Undefined → seed default; an explicit empty string is a deliberate "none".
+    flashcardGuidance:
+      typeof settings?.flashcardGuidance === 'string'
+        ? settings.flashcardGuidance
+        : DEFAULT_FLASHCARD_GUIDANCE
   }
 }
 

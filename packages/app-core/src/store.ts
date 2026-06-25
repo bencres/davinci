@@ -41,7 +41,11 @@ import {
   type FlashcardDeck,
   type FlashcardDraft
 } from '@shared/flashcards'
-import { DEFAULT_FLASHCARD_MODEL, DEFAULT_FLASHCARD_DENSITY } from '@shared/ipc'
+import {
+  DEFAULT_FLASHCARD_MODEL,
+  DEFAULT_FLASHCARD_DENSITY,
+  DEFAULT_FLASHCARD_GUIDANCE
+} from '@shared/ipc'
 import type { FlashcardDensity } from '@shared/ipc'
 import type { FlashcardCardMix } from '@zennotes/bridge-contract/bridge'
 import { parseFrontmatter } from '@shared/template-files'
@@ -3661,6 +3665,7 @@ export const useStore = create<Store>((set, get) => {
         cardMix: o.cardMix,
         maxCards: o.maxCards ?? undefined,
         instructions: o.instructions,
+        guidance: s.vaultSettings.flashcardGuidance ?? DEFAULT_FLASHCARD_GUIDANCE,
         existing
       })
       set({
@@ -3701,6 +3706,7 @@ export const useStore = create<Store>((set, get) => {
         cardMix: o.cardMix,
         maxCards: o.maxCards ?? undefined,
         instructions: o.instructions,
+        guidance: s.vaultSettings.flashcardGuidance ?? DEFAULT_FLASHCARD_GUIDANCE,
         existing
       })
       set((prev) => ({

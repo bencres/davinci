@@ -333,9 +333,22 @@ export interface VaultSettings {
   flashcardModel?: string
   /** How many cards to aim for per note — drives the generation prompt. */
   flashcardDensity?: FlashcardDensity
+  /**
+   * Persistent, user-editable steer merged into every generation prompt (in
+   * addition to any per-run custom instructions). Seeded with `DEFAULT_FLASHCARD_GUIDANCE`
+   * so domain emphasis is editable data, not a hardcoded branch.
+   */
+  flashcardGuidance?: string
 }
 
 export const DEFAULT_FLASHCARD_MODEL = 'claude-sonnet-4-6'
+
+/**
+ * Default persistent generation guidance. Tuned for the primary use case
+ * (growing software-engineering depth), but fully editable in Settings → Study.
+ */
+export const DEFAULT_FLASHCARD_GUIDANCE =
+  'For computer-science / software-engineering material, prefer synthesis cards framed as real-world application, production & operational scenarios, systems-design and architecture trade-offs, or senior-level technical-interview questions — whichever best fits the concept. Aim for senior-engineer depth: trade-offs, failure modes, and behavior at scale.'
 
 /**
  * Card-density preference for generation. `concise` tests only the most
@@ -373,7 +386,8 @@ export const DEFAULT_VAULT_SETTINGS: VaultSettings = {
   folderColors: {},
   favorites: [],
   flashcardModel: DEFAULT_FLASHCARD_MODEL,
-  flashcardDensity: DEFAULT_FLASHCARD_DENSITY
+  flashcardDensity: DEFAULT_FLASHCARD_DENSITY,
+  flashcardGuidance: DEFAULT_FLASHCARD_GUIDANCE
 }
 
 export interface NoteMeta {

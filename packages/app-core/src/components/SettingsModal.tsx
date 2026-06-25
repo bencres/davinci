@@ -8,7 +8,8 @@ import {
   DEFAULT_WEEKLY_NOTE_TITLE_PATTERN,
   DEFAULT_WEEKLY_NOTES_DIRECTORY,
   DEFAULT_FLASHCARD_MODEL,
-  DEFAULT_FLASHCARD_DENSITY
+  DEFAULT_FLASHCARD_DENSITY,
+  DEFAULT_FLASHCARD_GUIDANCE
 } from '@shared/ipc'
 import type {
   AppUpdateState,
@@ -654,6 +655,24 @@ export function SettingsModal(): JSX.Element {
   const [anthropicKeyPresent, setAnthropicKeyPresent] = useState(false)
   const [anthropicKeyInput, setAnthropicKeyInput] = useState('')
   const [anthropicKeyBusy, setAnthropicKeyBusy] = useState(false)
+
+  // Standing generation guidance — a persisted vault setting; committed on blur
+  // so we don't write the vault on every keystroke. An empty string is a valid,
+  // intentional "no standing guidance" choice (distinct from the seeded default).
+  const guidanceValue = vaultSettings.flashcardGuidance ?? DEFAULT_FLASHCARD_GUIDANCE
+  const [guidanceDraft, setGuidanceDraft] = useState(guidanceValue)
+  const [guidanceFocused, setGuidanceFocused] = useState(false)
+  useEffect(() => {
+    if (!guidanceFocused) setGuidanceDraft(guidanceValue)
+  }, [guidanceValue, guidanceFocused])
+  const commitGuidance = useCallback(
+    (next: string) => {
+      setGuidanceFocused(false)
+      if (next === guidanceValue) return
+      void persistVaultSettings({ ...vaultSettings, flashcardGuidance: next })
+    },
+    [guidanceValue, persistVaultSettings, vaultSettings]
+  )
   useEffect(() => {
     if (typeof window.zen?.getAnthropicKeyPresent !== 'function') return
     let cancelled = false
@@ -1587,6 +1606,39 @@ export function SettingsModal(): JSX.Element {
                 void persistVaultSettings({ ...vaultSettings, flashcardDensity })
               }
             />
+          </Section>
+
+          <Section
+            title="Generation guidance"
+            description="Standing instructions merged into every study-card generation, on top of any per-run custom instructions. It's editable data, not a fixed rule — change it for your subject, or clear it entirely."
+          >
+            <div className="space-y-2 px-5 py-5" {...settingsSearchTargetProps('flashcard-guidance')}>
+              <textarea
+                value={guidanceDraft}
+                onFocus={() => setGuidanceFocused(true)}
+                onChange={(e) => setGuidanceDraft(e.target.value)}
+                onBlur={(e) => commitGuidance(e.target.value)}
+                rows={5}
+                placeholder="e.g. Emphasize systems-design trade-offs and senior-level interview framing…"
+                className="w-full resize-y rounded-xl border border-paper-300/70 bg-paper-50/75 px-3 py-2.5 text-sm leading-6 text-ink-900 outline-none placeholder:text-ink-400 focus:border-accent/45"
+              />
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs leading-5 text-ink-500">
+                  Applies to new generations. Per-run “Custom” instructions take precedence.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGuidanceDraft(DEFAULT_FLASHCARD_GUIDANCE)
+                    commitGuidance(DEFAULT_FLASHCARD_GUIDANCE)
+                  }}
+                  disabled={guidanceValue === DEFAULT_FLASHCARD_GUIDANCE}
+                  className="shrink-0 rounded-lg border border-paper-300/70 bg-paper-100/80 px-2.5 py-1 text-2xs font-medium text-ink-700 transition-colors hover:bg-paper-200 disabled:cursor-default disabled:text-ink-400"
+                >
+                  Reset to default
+                </button>
+              </div>
+            </div>
           </Section>
         </div>
       )
