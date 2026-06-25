@@ -189,16 +189,42 @@ export function buildCommands(options?: { includeUnavailable?: boolean }): Comma
       run: () => getState().saveActiveNoteAsTemplate()
     },
     {
-      id: 'flashcards.generate',
-      title: 'Generate Study Cards from This Note',
+      id: 'flashcards.generate.quick',
+      title: 'Study: Quick Generate Cards from This Note',
       category: 'Note',
-      keywords: 'study flashcard learn anki srs quiz recall spaced repetition',
-      shortcut: leaderShortcut('vim.leaderGenerateFlashcards'),
+      keywords: 'study flashcard learn anki srs quiz recall spaced repetition quick generate',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyQuick')}`,
       when: () => !!getState().activeNote,
       run: async () => {
         const s = getState()
         if (!s.activeNote) return
-        await s.openFlashcardReview(s.activeNote.path)
+        await s.openFlashcardReview(s.activeNote.path, 'quick')
+      }
+    },
+    {
+      id: 'flashcards.generate.custom',
+      title: 'Study: Custom Generate Cards…',
+      category: 'Note',
+      keywords: 'study flashcard custom density instructions options generate',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyCustom')}`,
+      when: () => !!getState().activeNote,
+      run: async () => {
+        const s = getState()
+        if (!s.activeNote) return
+        await s.openFlashcardReview(s.activeNote.path, 'custom')
+      }
+    },
+    {
+      id: 'flashcards.generate.manual',
+      title: 'Study: Add Cards Manually',
+      category: 'Note',
+      keywords: 'study flashcard manual hand author create own card',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyManual')}`,
+      when: () => !!getState().activeNote,
+      run: async () => {
+        const s = getState()
+        if (!s.activeNote) return
+        await s.openFlashcardReview(s.activeNote.path, 'manual')
       }
     },
     {

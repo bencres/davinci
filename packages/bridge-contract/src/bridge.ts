@@ -65,6 +65,9 @@ export interface ZenCapabilities {
   supportsCustomTemplates: boolean
 }
 
+/** Bias the recall/synthesis split of a generation run. */
+export type FlashcardCardMix = 'balanced' | 'recall' | 'synthesis'
+
 /** Options for a flashcard-generation request. */
 export interface GenerateOptions {
   /** Model id; defaults to the vault's configured model (`claude-sonnet-4-6`). */
@@ -77,6 +80,12 @@ export interface GenerateOptions {
    * to avoid re-creating already-saved cards.
    */
   existing?: string[]
+  /** Free-text steering appended to the prompt (custom generation). */
+  instructions?: string
+  /** Bias toward recall or synthesis cards; defaults to balanced. */
+  cardMix?: FlashcardCardMix
+  /** Soft target for the number of cards (still clamped to the hard per-run cap). */
+  maxCards?: number
 }
 
 /** Result of a flashcard-generation request: validated drafts + drop count. */

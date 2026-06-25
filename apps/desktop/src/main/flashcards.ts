@@ -27,6 +27,7 @@ import {
 } from '@shared/flashcards'
 import type { FlashcardDensity } from '@shared/ipc'
 import { DEFAULT_FLASHCARD_DENSITY } from '@shared/ipc'
+import type { FlashcardCardMix } from '@zennotes/bridge-contract/bridge'
 import { absolutePath, writeFileAtomic } from './vault'
 import { getAnthropicApiKey } from './secret-store'
 
@@ -233,25 +234,44 @@ SYNTHESIS kinds connect the note to scenarios, other notes, or the real world. O
 
 CONTRACT (cards violating it are dropped): a subtype must match its kind; recall cards have a concrete back and NO rubric; every synthesis card MUST carry a valid rubric (>=1 criterion with non-empty description + positive weight, plus a non-empty modelAnswer). Favor a SPREAD of subtypes over a pile of cued cards — variety is a desirable difficulty. Aim for a balance of recall and synthesis cards.`
 
-function buildUserPrompt(
-  notePath: string,
-  body: string,
-  density: FlashcardDensity,
+const CARD_MIX_GUIDANCE: Record<FlashcardCardMix, string> = {
+  balanced: 'MIX: aim for a balance of recall and synthesis cards.',
+  recall:
+    'MIX: favor recall cards (direct retrieval of material in the note); include a synthesis card only where transfer is clearly valuable.',
+  synthesis:
+    'MIX: favor synthesis cards (application, connection, critique, etc.); include recall cards only for the essential underlying facts.'
+}
+
+interface UserPromptParams {
+  notePath: string
+  body: string
+  density: FlashcardDensity
   existing: string[]
-): string {
+  cardMix: FlashcardCardMix
+  maxCards: number
+  instructions: string
+}
+
+function buildUserPrompt(p: UserPromptParams): string {
   const directives = [
-    DENSITY_GUIDANCE[density] ?? DENSITY_GUIDANCE[DEFAULT_FLASHCARD_DENSITY],
-    `Produce AT MOST ${FLASHCARD_MAX_PER_RUN} cards this run.`
+    DENSITY_GUIDANCE[p.density] ?? DENSITY_GUIDANCE[DEFAULT_FLASHCARD_DENSITY],
+    CARD_MIX_GUIDANCE[p.cardMix] ?? CARD_MIX_GUIDANCE.balanced,
+    `Produce AT MOST ${p.maxCards} cards this run.`
   ]
-  if (existing.length > 0) {
-    const list = existing.slice(0, 60).map((s) => `- ${s}`).join('\n')
+  if (p.existing.length > 0) {
+    const list = p.existing.slice(0, 60).map((s) => `- ${s}`).join('\n')
     directives.push(
       `These cards/concepts already exist for this note — do NOT repeat them; produce different, complementary cards (return an empty array if nothing worthwhile remains):\n${list}`
     )
   }
-  return `Generate study cards from the note below (vault path: ${notePath}).\n\n${directives.join(
+  if (p.instructions.trim()) {
+    directives.push(
+      `ADDITIONAL INSTRUCTIONS FROM THE USER (follow these, but never break the JSON shape or the card contract):\n${p.instructions.trim()}`
+    )
+  }
+  return `Generate study cards from the note below (vault path: ${p.notePath}).\n\n${directives.join(
     '\n'
-  )}\n\n--- NOTE START ---\n${body}\n--- NOTE END ---\n\nReturn the JSON array now.`
+  )}\n\n--- NOTE START ---\n${p.body}\n--- NOTE END ---\n\nReturn the JSON array now.`
 }
 
 /** Extract the JSON array from a model response, tolerating stray prose/fences. */
@@ -284,7 +304,14 @@ export interface GenerateFlashcardsResult {
 export async function generateFlashcards(
   root: string,
   notePath: string,
-  opts: { model?: string; density?: FlashcardDensity; existing?: string[] } = {}
+  opts: {
+    model?: string
+    density?: FlashcardDensity
+    existing?: string[]
+    cardMix?: FlashcardCardMix
+    maxCards?: number
+    instructions?: string
+  } = {}
 ): Promise<GenerateFlashcardsResult> {
   const apiKey = await getAnthropicApiKey()
   if (!apiKey) throw new MissingAnthropicKeyError()
@@ -293,13 +320,31 @@ export async function generateFlashcards(
   const model = opts.model?.trim() || DEFAULT_FLASHCARD_MODEL
   const density = opts.density ?? DEFAULT_FLASHCARD_DENSITY
   const existing = (opts.existing ?? []).filter((s) => typeof s === 'string' && s.trim())
+  const cardMix: FlashcardCardMix = opts.cardMix ?? 'balanced'
+  // Clamp a requested target into [1, hard cap]; default to the hard cap.
+  const maxCards = Number.isFinite(opts.maxCards)
+    ? Math.min(FLASHCARD_MAX_PER_RUN, Math.max(1, Math.round(opts.maxCards as number)))
+    : FLASHCARD_MAX_PER_RUN
 
   const client = new Anthropic({ apiKey })
   const response = await client.messages.create({
     model,
     max_tokens: 16000,
     system: FLASHCARD_SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: buildUserPrompt(notePath, body, density, existing) }]
+    messages: [
+      {
+        role: 'user',
+        content: buildUserPrompt({
+          notePath,
+          body,
+          density,
+          existing,
+          cardMix,
+          maxCards,
+          instructions: opts.instructions ?? ''
+        })
+      }
+    ]
   })
 
   const text = response.content
@@ -316,8 +361,8 @@ export async function generateFlashcards(
     else dropped++
   }
   // Defensive cap — the prompt asks for at most N, but enforce it regardless.
-  if (drafts.length > FLASHCARD_MAX_PER_RUN) {
-    drafts.length = FLASHCARD_MAX_PER_RUN
+  if (drafts.length > maxCards) {
+    drafts.length = maxCards
   }
   return { drafts, dropped }
 }

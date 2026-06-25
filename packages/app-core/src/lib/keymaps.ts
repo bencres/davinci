@@ -53,7 +53,10 @@ export type KeymapId =
   | "vim.leaderDailyNote"
   | "vim.leaderWeeklyNote"
   | "vim.leaderCalendar"
-  | "vim.leaderGenerateFlashcards"
+  | "vim.leaderStudyGroup"
+  | "vim.leaderStudyQuick"
+  | "vim.leaderStudyCustom"
+  | "vim.leaderStudyManual"
   | "vim.panePrefix"
   | "vim.paneFocusLeft"
   | "vim.paneFocusDown"
@@ -549,13 +552,46 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     maxTokens: 1,
   },
   {
-    id: "vim.leaderGenerateFlashcards",
+    id: "vim.leaderStudyGroup",
     kind: "sequence",
     scope: "leader",
     group: "vim",
-    title: "Leader: generate study cards",
-    description: "Generate spaced-repetition study cards from the active note.",
+    title: "Leader: study group",
+    description: "Open the study group — then quick, custom, or manual generation.",
     defaultBinding: "g",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyQuick",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: quick generate",
+    description: "Generate study cards from the active note with your saved settings.",
+    defaultBinding: "g",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyCustom",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: custom generate",
+    description: "Configure density and custom instructions before generating.",
+    defaultBinding: "c",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyManual",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: manual cards",
+    description: "Hand-author your own study cards for the active note.",
+    defaultBinding: "m",
     vimOnly: true,
     maxTokens: 1,
   },

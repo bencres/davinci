@@ -75,23 +75,66 @@ beforeEach(() => {
 })
 
 describe('flashcards store slice', () => {
-  it('generation populates the review batch and passes model + density', async () => {
+  it('generation populates the review batch and passes the active gen options', async () => {
     const { useStore } = await loadStore()
     useStore.setState({
       flashcardReviewNote: NOTE,
-      vaultSettings: { ...useStore.getState().vaultSettings, flashcardDensity: 'thorough' }
+      flashcardGenOptions: {
+        density: 'thorough',
+        cardMix: 'synthesis',
+        instructions: 'be terse',
+        maxCards: 7
+      }
     })
     await useStore.getState().generateFlashcardsForActiveNote()
 
     const s = useStore.getState()
     expect(generateMock).toHaveBeenCalledWith(
       NOTE,
-      expect.objectContaining({ model: expect.any(String), density: 'thorough' })
+      expect.objectContaining({
+        model: expect.any(String),
+        density: 'thorough',
+        cardMix: 'synthesis',
+        instructions: 'be terse',
+        maxCards: 7
+      })
     )
     expect(s.flashcardGenStatus).toBe('reviewing')
     expect(s.flashcardDraftCards).toHaveLength(2)
     expect(s.flashcardDraftKept).toEqual([true, true])
     expect(s.flashcardDropped).toBe(1)
+  })
+
+  it('custom mode opens the config form without generating; manual opens an empty list', async () => {
+    const { useStore } = await loadStore()
+    await useStore.getState().openFlashcardReview(NOTE, 'custom')
+    expect(useStore.getState().flashcardGenStatus).toBe('configuring')
+    expect(generateMock).not.toHaveBeenCalled()
+
+    await useStore.getState().openFlashcardReview(NOTE, 'manual')
+    expect(useStore.getState().flashcardGenStatus).toBe('reviewing')
+    expect(useStore.getState().flashcardDraftCards).toHaveLength(0)
+    expect(generateMock).not.toHaveBeenCalled()
+  })
+
+  it('addManualCard appends a blank recall card on the reviewing surface', async () => {
+    const { useStore } = await loadStore()
+    await useStore.getState().openFlashcardReview(NOTE, 'manual')
+    const idx = useStore.getState().addManualCard()
+    const s = useStore.getState()
+    expect(idx).toBe(0)
+    expect(s.flashcardDraftCards[0]).toMatchObject({ kind: 'recall', subtype: 'cued', front: '' })
+    expect(s.flashcardDraftEdited[0]).toBe(true)
+    expect(s.flashcardGenStatus).toBe('reviewing')
+  })
+
+  it('saveReviewedFlashcards skips contract-invalid (e.g. blank manual) cards', async () => {
+    const { useStore } = await loadStore()
+    await useStore.getState().openFlashcardReview(NOTE, 'manual')
+    const idx = useStore.getState().addManualCard() // blank front/back → invalid
+    await useStore.getState().saveReviewedFlashcards([idx])
+    expect(writeMock).not.toHaveBeenCalled()
+    expect(useStore.getState().flashcardGenError).toMatch(/incomplete/i)
   })
 
   it('generateMoreFlashcards appends and excludes existing fronts/concepts', async () => {

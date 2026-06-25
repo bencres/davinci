@@ -54,7 +54,7 @@ export function VimNav(): JSX.Element | null {
   const jumpTopPending = useRef(0)
   const previousBufferPending = useRef(0)
   const nextBufferPending = useRef(0)
-  const leaderPending = useRef<'leader' | 'leader-l' | 'leader-s' | null>(null)
+  const leaderPending = useRef<'leader' | 'leader-l' | 'leader-s' | 'leader-g' | null>(null)
   const ctrlWTimer = useRef<ReturnType<typeof setTimeout>>()
   const jumpTopTimer = useRef<ReturnType<typeof setTimeout>>()
   const previousBufferTimer = useRef<ReturnType<typeof setTimeout>>()
@@ -64,7 +64,7 @@ export function VimNav(): JSX.Element | null {
   // Hint mode needs a render (to mount HintOverlay), so it's state.
   const [hintActive, setHintActive] = useState(false)
   const [whichKeyState, setWhichKeyState] = useState<{
-    stage: 'leader' | 'leader-l' | 'leader-s'
+    stage: 'leader' | 'leader-l' | 'leader-s' | 'leader-g'
     allowEditorActions: boolean
   } | null>(null)
   const hintRef = useRef(false)
@@ -141,7 +141,7 @@ export function VimNav(): JSX.Element | null {
     setWhichKeyState(null)
   }, [])
   const armLeader = useCallback(
-    (stage: 'leader' | 'leader-l' | 'leader-s', allowEditorActions: boolean) => {
+    (stage: 'leader' | 'leader-l' | 'leader-s' | 'leader-g', allowEditorActions: boolean) => {
       leaderPending.current = stage
       setWhichKeyState({ stage, allowEditorActions })
       if (leaderTimer.current) clearTimeout(leaderTimer.current)
@@ -182,6 +182,25 @@ export function VimNav(): JSX.Element | null {
           keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderSearchVaultText'),
           label: 'Search vault text',
           detail: 'Fuzzy-search note contents across the vault.'
+        }
+      ]
+    }
+    if (whichKeyState.stage === 'leader-g') {
+      return [
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyQuick'),
+          label: 'Quick generate',
+          detail: 'Generate study cards using your saved settings.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyCustom'),
+          label: 'Custom generate',
+          detail: 'Set density and custom instructions before generating.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyManual'),
+          label: 'Manual cards',
+          detail: 'Hand-author your own study cards.'
         }
       ]
     }
@@ -257,9 +276,9 @@ export function VimNav(): JSX.Element | null {
         detail: 'Show or hide the calendar for the active daily/weekly note.'
       },
       {
-        keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderGenerateFlashcards'),
-        label: 'Generate study cards',
-        detail: 'Generate spaced-repetition study cards from the active note.'
+        keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyGroup'),
+        label: 'Study…',
+        detail: 'Open the study group — quick, custom, or manual generation.'
       }
     ]
     if (whichKeyState.allowEditorActions) {
@@ -743,12 +762,10 @@ export function VimNav(): JSX.Element | null {
           window.dispatchEvent(new Event('zen:toggle-calendar'))
           return
         }
-        if (matchesSequenceToken(e, overrides, 'vim.leaderGenerateFlashcards')) {
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyGroup')) {
           e.preventDefault()
           e.stopImmediatePropagation()
-          resetLeader()
-          const active = state.activeNote
-          if (active) void state.openFlashcardReview(active.path)
+          armLeader('leader-g', editorNormalMode)
           return
         }
         // Any other key cancels leader and falls through to normal routing.
@@ -788,6 +805,20 @@ export function VimNav(): JSX.Element | null {
           state.setVaultTextSearchOpen(true)
           return
         }
+        resetLeader()
+      }
+
+      if (leaderPending.current === 'leader-g') {
+        const active = state.activeNote
+        const openStudy = (mode: 'quick' | 'custom' | 'manual'): void => {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          if (active) void state.openFlashcardReview(active.path, mode)
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyQuick')) return openStudy('quick')
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyCustom')) return openStudy('custom')
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyManual')) return openStudy('manual')
         resetLeader()
       }
 
@@ -1953,8 +1984,13 @@ export function VimNav(): JSX.Element | null {
     const leaderDisplay = getKeymapDisplay(keymapOverrides, 'vim.leaderPrefix')
     const noteActionsDisplay = getKeymapDisplay(keymapOverrides, 'vim.leaderNoteActions')
     const searchGroupDisplay = getKeymapDisplay(keymapOverrides, 'vim.leaderSearchGroup')
+    const studyGroupDisplay = getKeymapDisplay(keymapOverrides, 'vim.leaderStudyGroup')
     const subPrefix =
-      whichKeyState.stage === 'leader-s' ? searchGroupDisplay : noteActionsDisplay
+      whichKeyState.stage === 'leader-s'
+        ? searchGroupDisplay
+        : whichKeyState.stage === 'leader-g'
+          ? studyGroupDisplay
+          : noteActionsDisplay
     return (
       <WhichKeyOverlay
         prefix={whichKeyState.stage === 'leader' ? leaderDisplay : `${leaderDisplay} ${subPrefix}`}
@@ -1963,7 +1999,9 @@ export function VimNav(): JSX.Element | null {
             ? 'Leader'
             : whichKeyState.stage === 'leader-s'
               ? 'Leader · Search'
-              : 'Leader · Note Actions'
+              : whichKeyState.stage === 'leader-g'
+                ? 'Leader · Study'
+                : 'Leader · Note Actions'
         }
         detail={
           stickyWhichKeyHints

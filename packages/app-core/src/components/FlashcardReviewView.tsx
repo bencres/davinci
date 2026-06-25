@@ -5,13 +5,32 @@ import {
   findSourceQuoteOffset,
   notePathFromFlashcardsTab,
   flashcardsTitleFromTab,
+  RECALL_SUBTYPES,
+  SYNTHESIS_SUBTYPES,
   type FlashcardDraft,
+  type FlashcardKind,
+  type RecallSubtype,
   type Rubric,
-  type RubricCriterion
+  type RubricCriterion,
+  type SynthesisSubtype
 } from '@shared/flashcards'
 import { matchesSequenceToken, matchesShortcut } from '../lib/keymaps'
 import { isAppOverlayOpen } from '../lib/overlay-open'
 import { ArrowUpRightIcon } from './icons'
+
+const CARD_MIX_OPTIONS = [
+  { value: 'balanced', label: 'Balanced' },
+  { value: 'recall', label: 'Recall' },
+  { value: 'synthesis', label: 'Synthesis' }
+] as const
+
+/** A fresh rubric to seed when a card is switched to synthesis. */
+function blankRubric(): Rubric {
+  return {
+    criteria: [{ id: crypto.randomUUID(), description: '', weight: 1 }],
+    modelAnswer: ''
+  }
+}
 
 interface Props {
   tabPath: string
@@ -59,15 +78,18 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
   const error = useStore((s) => s.flashcardGenError)
   const dropped = useStore((s) => s.flashcardDropped)
   const genMoreLoading = useStore((s) => s.flashcardGenMoreLoading)
+  const genOptions = useStore((s) => s.flashcardGenOptions)
   const deckByNote = useStore((s) => s.flashcardDeckByNote)
   const keymapOverrides = useStore((s) => s.keymapOverrides)
   const vimMode = useStore((s) => s.vimMode)
 
   const updateDraftCard = useStore((s) => s.updateDraftCard)
   const toggleDraftCardKept = useStore((s) => s.toggleDraftCardKept)
+  const addManualCard = useStore((s) => s.addManualCard)
   const saveReviewedFlashcards = useStore((s) => s.saveReviewedFlashcards)
   const generateForActive = useStore((s) => s.generateFlashcardsForActiveNote)
   const generateMore = useStore((s) => s.generateMoreFlashcards)
+  const setGenOption = useStore((s) => s.setFlashcardGenOption)
   const setFocusedPanel = useStore((s) => s.setFocusedPanel)
   const closeActiveNote = useStore((s) => s.closeActiveNote)
   const setSettingsOpen = useStore((s) => s.setSettingsOpen)
@@ -230,6 +252,51 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
     [drafts, updateRubric]
   )
 
+  const addCriterion = useCallback(
+    (index: number) => {
+      const rubric = drafts[index]?.rubric
+      if (!rubric || rubric.criteria.length >= 4) return
+      updateRubric(index, {
+        criteria: [...rubric.criteria, { id: crypto.randomUUID(), description: '', weight: 1 }]
+      })
+    },
+    [drafts, updateRubric]
+  )
+
+  const removeCriterion = useCallback(
+    (index: number, criterionIdx: number) => {
+      const rubric = drafts[index]?.rubric
+      if (!rubric || rubric.criteria.length <= 1) return
+      updateRubric(index, { criteria: rubric.criteria.filter((_, i) => i !== criterionIdx) })
+    },
+    [drafts, updateRubric]
+  )
+
+  // Switch a card's kind, seeding/dropping the rubric and resetting to a valid subtype.
+  const changeKind = useCallback(
+    (index: number, kind: FlashcardKind) => {
+      const draft = drafts[index]
+      if (!draft || draft.kind === kind) return
+      if (kind === 'synthesis') {
+        updateDraftCard(index, {
+          kind: 'synthesis',
+          subtype: 'application',
+          rubric: draft.rubric ?? blankRubric(),
+          acceptableAnswers: undefined
+        })
+      } else {
+        updateDraftCard(index, { kind: 'recall', subtype: 'cued', rubric: undefined })
+      }
+    },
+    [drafts, updateDraftCard]
+  )
+
+  const addCard = useCallback(() => {
+    const idx = addManualCard()
+    setFocusedIndex(idx)
+    setEditingIndex(idx)
+  }, [addManualCard])
+
   return (
     <div
       ref={rootRef}
@@ -247,6 +314,70 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
           <h1 className="font-serif text-2xl font-semibold text-ink-900">{title}</h1>
           <div className="text-sm text-ink-500">{notePath}</div>
         </header>
+
+        {isReviewTarget && status === 'configuring' && (
+          <div className="flex flex-col gap-4 rounded-2xl border border-paper-300/70 bg-paper-50/50 px-5 py-5">
+            <div className="text-sm font-medium text-ink-800">Custom generation</div>
+            <Pills
+              label="Density"
+              value={genOptions.density}
+              options={[
+                { value: 'concise', label: 'Concise' },
+                { value: 'balanced', label: 'Balanced' },
+                { value: 'thorough', label: 'Thorough' }
+              ]}
+              onChange={(density) => setGenOption({ density })}
+            />
+            <Pills
+              label="Card mix"
+              value={genOptions.cardMix}
+              options={CARD_MIX_OPTIONS}
+              onChange={(cardMix) => setGenOption({ cardMix })}
+            />
+            <Field label="Max cards (optional)">
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={genOptions.maxCards ?? ''}
+                placeholder="Up to 20"
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10)
+                  setGenOption({ maxCards: Number.isFinite(n) ? Math.min(20, Math.max(1, n)) : null })
+                }}
+                className={`${inputClass} w-32`}
+              />
+            </Field>
+            <Field label="Custom instructions (optional)">
+              <textarea
+                rows={3}
+                value={genOptions.instructions}
+                placeholder="e.g. Focus on the proofs; write cloze cards for the key formulas; keep answers terse."
+                onChange={(e) => setGenOption({ instructions: e.target.value })}
+                className={inputClass}
+              />
+            </Field>
+            <div className="text-xs text-ink-500">
+              The model is set in Settings → Study. Card count still follows the note's concepts and a per-run cap.
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void generateForActive()}
+                className="rounded-xl bg-accent/90 px-4 py-2 text-sm font-medium text-white hover:bg-accent"
+              >
+                Generate
+              </button>
+              <button
+                type="button"
+                onClick={() => void closeActiveNote()}
+                className="rounded-xl border border-paper-300/70 bg-paper-100/80 px-3 py-2 text-xs font-medium text-ink-800 hover:bg-paper-200"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {isReviewTarget && status === 'generating' && (
           <div className="flex items-center gap-3 rounded-2xl border border-paper-300/70 bg-paper-50/50 px-5 py-6 text-sm text-ink-600">
@@ -288,6 +419,13 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                 {error && <span className="text-[rgb(var(--z-red))]"> {error}</span>}
               </div>
               <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={addCard}
+                  className="rounded-lg border border-paper-300/70 bg-paper-100/80 px-3 py-1.5 text-xs font-medium text-ink-800 hover:bg-paper-200"
+                >
+                  + Add card
+                </button>
                 <button
                   type="button"
                   onClick={() => void generateMore()}
@@ -367,6 +505,54 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
 
                     {editing ? (
                       <div className="mt-3 flex flex-col gap-3 text-sm">
+                        <div className="grid grid-cols-3 gap-3">
+                          <Field label="Kind">
+                            <select
+                              value={draft.kind}
+                              onChange={(e) => changeKind(index, e.target.value as FlashcardKind)}
+                              className={inputClass}
+                            >
+                              <option value="recall">recall</option>
+                              <option value="synthesis">synthesis</option>
+                            </select>
+                          </Field>
+                          <Field label="Subtype">
+                            <select
+                              value={draft.subtype}
+                              onChange={(e) =>
+                                updateDraftCard(index, {
+                                  subtype: e.target.value as RecallSubtype | SynthesisSubtype
+                                })
+                              }
+                              className={inputClass}
+                            >
+                              {(draft.kind === 'recall' ? RECALL_SUBTYPES : SYNTHESIS_SUBTYPES).map(
+                                (st) => (
+                                  <option key={st} value={st}>
+                                    {st}
+                                  </option>
+                                )
+                              )}
+                            </select>
+                          </Field>
+                          <Field label="Difficulty">
+                            <select
+                              value={draft.difficulty}
+                              onChange={(e) =>
+                                updateDraftCard(index, {
+                                  difficulty: Number(e.target.value) as FlashcardDraft['difficulty']
+                                })
+                              }
+                              className={inputClass}
+                            >
+                              {[1, 2, 3, 4, 5].map((d) => (
+                                <option key={d} value={d}>
+                                  {difficultyLabel(d)}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+                        </div>
                         <Field label="Front (prompt)">
                           <textarea
                             value={draft.front}
@@ -405,14 +591,25 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                         </div>
                         {draft.kind === 'synthesis' && draft.rubric && (
                           <div className="rounded-xl border border-paper-300/60 bg-paper-100/40 px-3 py-3">
-                            <div className="text-xs font-medium uppercase tracking-[0.14em] text-ink-500">
-                              Rubric
+                            <div className="flex items-center justify-between">
+                              <div className="text-xs font-medium uppercase tracking-[0.14em] text-ink-500">
+                                Rubric · a good answer includes
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => addCriterion(index)}
+                                disabled={draft.rubric.criteria.length >= 4}
+                                className="rounded-md px-1.5 py-0.5 text-2xs font-medium text-ink-600 hover:bg-paper-200 disabled:text-ink-300"
+                              >
+                                + Criterion
+                              </button>
                             </div>
                             <div className="mt-2 flex flex-col gap-2">
                               {draft.rubric.criteria.map((c, ci) => (
                                 <div key={c.id} className="flex items-center gap-2">
                                   <input
                                     value={c.description}
+                                    placeholder="what a good answer must show"
                                     onChange={(e) =>
                                       updateCriterion(index, ci, { description: e.target.value })
                                     }
@@ -423,6 +620,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                                     min={1}
                                     max={3}
                                     value={c.weight}
+                                    title="weight (1–3)"
                                     onChange={(e) =>
                                       updateCriterion(index, ci, {
                                         weight: Math.max(1, Math.min(3, Number(e.target.value) || 1))
@@ -430,6 +628,15 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                                     }
                                     className={`${inputClass} w-16`}
                                   />
+                                  <button
+                                    type="button"
+                                    onClick={() => removeCriterion(index, ci)}
+                                    disabled={draft.rubric!.criteria.length <= 1}
+                                    title="Remove criterion"
+                                    className="rounded-md px-1.5 py-1 text-xs text-ink-400 hover:bg-paper-200 hover:text-[rgb(var(--z-red))] disabled:opacity-40"
+                                  >
+                                    ✕
+                                  </button>
                                 </div>
                               ))}
                             </div>
@@ -515,15 +722,28 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
         )}
 
         {isReviewTarget && status === 'reviewing' && drafts.length === 0 && (
-          <div className="rounded-2xl border border-paper-300/70 bg-paper-50/50 px-5 py-6 text-sm text-ink-600">
-            No cards to review. {dropped > 0 ? `${dropped} card(s) were dropped as invalid. ` : ''}
-            <button
-              type="button"
-              onClick={() => void generateForActive()}
-              className="font-medium text-accent underline-offset-2 hover:underline"
-            >
-              Regenerate
-            </button>
+          <div className="flex flex-col items-start gap-3 rounded-2xl border border-paper-300/70 bg-paper-50/50 px-5 py-6 text-sm text-ink-600">
+            <div>
+              No cards yet. {dropped > 0 ? `${dropped} card(s) were dropped as invalid. ` : ''}
+              Add your own, or generate some with Claude.
+              {error && <span className="text-[rgb(var(--z-red))]"> {error}</span>}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={addCard}
+                className="rounded-lg bg-accent/90 px-3.5 py-1.5 text-xs font-medium text-white hover:bg-accent"
+              >
+                + Add card
+              </button>
+              <button
+                type="button"
+                onClick={() => void generateForActive()}
+                className="rounded-lg border border-paper-300/70 bg-paper-100/80 px-3.5 py-1.5 text-xs font-medium text-ink-800 hover:bg-paper-200"
+              >
+                Generate with Claude
+              </button>
+            </div>
           </div>
         )}
 
@@ -584,6 +804,40 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="text-2xs uppercase tracking-[0.14em] text-ink-500">{label}</span>
       {children}
     </label>
+  )
+}
+
+/** A small segmented pill control for the custom-generation form. */
+function Pills<T extends string>({
+  label,
+  value,
+  options,
+  onChange
+}: {
+  label: string
+  value: T
+  options: readonly { value: T; label: string }[]
+  onChange: (next: T) => void
+}): JSX.Element {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-2xs uppercase tracking-[0.14em] text-ink-500">{label}</span>
+      <div className="inline-flex w-fit rounded-xl border border-paper-300/70 bg-paper-100/75 p-1">
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            onClick={() => onChange(o.value)}
+            className={[
+              'rounded-lg px-3 py-1 text-xs font-medium transition-colors',
+              value === o.value ? 'bg-paper-50 text-ink-900 shadow-sm' : 'text-ink-600 hover:text-ink-900'
+            ].join(' ')}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 

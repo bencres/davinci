@@ -37,10 +37,13 @@ import {
   draftToCard,
   emptyDeck,
   flashcardsTabPath,
+  normalizeDraft,
   type FlashcardDeck,
   type FlashcardDraft
 } from '@shared/flashcards'
-import { DEFAULT_FLASHCARD_MODEL } from '@shared/ipc'
+import { DEFAULT_FLASHCARD_MODEL, DEFAULT_FLASHCARD_DENSITY } from '@shared/ipc'
+import type { FlashcardDensity } from '@shared/ipc'
+import type { FlashcardCardMix } from '@zennotes/bridge-contract/bridge'
 import { parseFrontmatter } from '@shared/template-files'
 import { recordTitle, composePageBody } from './lib/database-cells'
 import { applyManualMove, manualOrderCompare, parentDirOf } from './lib/manual-order'
@@ -1610,6 +1613,19 @@ export function isQuickNotesViewActive(state: {
   return leaf?.activeTab === QUICK_NOTES_TAB_PATH
 }
 
+/** How a flashcard review tab was opened. */
+export type FlashcardReviewMode = 'quick' | 'custom' | 'manual'
+
+/** One-off generation options edited in the custom-generation form. */
+export interface FlashcardGenOptions {
+  density: FlashcardDensity
+  cardMix: FlashcardCardMix
+  /** Free-text steering for the model. */
+  instructions: string
+  /** Soft target for card count; null = use the per-run cap. */
+  maxCards: number | null
+}
+
 interface Store {
   vault: VaultInfo | null
   workspaceMode: WorkspaceMode
@@ -1795,12 +1811,15 @@ interface Store {
   flashcardDraftEdited: boolean[]
   /** Loaded saved decks keyed by source note path. */
   flashcardDeckByNote: Record<string, FlashcardDeck>
-  flashcardGenStatus: 'idle' | 'generating' | 'reviewing' | 'error'
+  /** `configuring` = custom-generation form before a run; `reviewing` = card list. */
+  flashcardGenStatus: 'idle' | 'configuring' | 'generating' | 'reviewing' | 'error'
   flashcardGenError: string | null
   /** How many cards Claude returned that failed normalization in the last run. */
   flashcardDropped: number
   /** True while a "Generate more" run is appending to the current review batch. */
   flashcardGenMoreLoading: boolean
+  /** Active per-generation options for this review session (custom + reused by "more"). */
+  flashcardGenOptions: FlashcardGenOptions
 
   /** Tags currently selected in the Tags view. The view shows every non-
    *  trash note carrying *all* (or, in `any` mode, any) of these, depending on
@@ -1889,12 +1908,20 @@ interface Store {
   openRecordPage: (csvPath: string, rowId: string) => Promise<void>
 
   // --- Flashcards (Phase 1) ---
-  /** Open the flashcard review tab for a note and kick off generation. */
-  openFlashcardReview: (notePath: string) => Promise<void>
+  /**
+   * Open the study review tab for a note. `quick` generates immediately,
+   * `custom` shows the generation-options form first, `manual` opens an empty
+   * batch for hand-authored cards.
+   */
+  openFlashcardReview: (notePath: string, mode?: FlashcardReviewMode) => Promise<void>
+  /** Patch the active per-generation options (custom form). */
+  setFlashcardGenOption: (patch: Partial<FlashcardGenOptions>) => void
   /** Run Claude generation for the review note; sets status/draft state. */
   generateFlashcardsForActiveNote: () => Promise<void>
   /** Run another capped generation and APPEND distinct cards to the review batch. */
   generateMoreFlashcards: () => Promise<void>
+  /** Append a blank, hand-authored recall card to the review batch (edit mode). */
+  addManualCard: () => number
   /** Patch a draft card in place (marks the run as user-edited). */
   updateDraftCard: (index: number, patch: Partial<FlashcardDraft>) => void
   /** Toggle a draft card's keep/discard state. */
@@ -3188,6 +3215,12 @@ export const useStore = create<Store>((set, get) => {
   flashcardGenError: null,
   flashcardDropped: 0,
   flashcardGenMoreLoading: false,
+  flashcardGenOptions: {
+    density: DEFAULT_FLASHCARD_DENSITY,
+    cardMix: 'balanced',
+    instructions: '',
+    maxCards: null
+  },
   selectedTags: [],
   tagMatchMode: 'all',
   focusedPanel: null,
@@ -3576,22 +3609,39 @@ export const useStore = create<Store>((set, get) => {
     }
   },
 
-  openFlashcardReview: async (notePath) => {
+  openFlashcardReview: async (notePath, mode = 'quick') => {
+    const vs = get().vaultSettings
     set({
       flashcardReviewNote: notePath,
-      flashcardGenStatus: 'idle',
+      // `manual` lands straight on an empty review list; the others reset to idle
+      // until generation runs (quick) or the user submits the form (custom).
+      flashcardGenStatus: mode === 'manual' ? 'reviewing' : 'idle',
       flashcardGenError: null,
       flashcardDraftCards: [],
       flashcardDraftKept: [],
       flashcardDraftEdited: [],
-      flashcardDropped: 0
+      flashcardDropped: 0,
+      flashcardGenOptions: {
+        density: vs.flashcardDensity ?? DEFAULT_FLASHCARD_DENSITY,
+        cardMix: 'balanced',
+        instructions: '',
+        maxCards: null
+      }
     })
     await get().openNoteInPane(get().activePaneId, flashcardsTabPath(notePath))
     ;(document.activeElement as HTMLElement | null)?.blur?.()
     set({ focusedPanel: 'editor' })
-    // Show any previously-saved deck while generation runs.
+    // Show any previously-saved deck while generating / authoring.
     await get().loadFlashcardDeck(notePath)
-    await get().generateFlashcardsForActiveNote()
+    if (mode === 'quick') {
+      await get().generateFlashcardsForActiveNote()
+    } else if (mode === 'custom') {
+      set({ flashcardGenStatus: 'configuring' })
+    }
+  },
+
+  setFlashcardGenOption: (patch) => {
+    set((s) => ({ flashcardGenOptions: { ...s.flashcardGenOptions, ...patch } }))
   },
 
   generateFlashcardsForActiveNote: async () => {
@@ -3602,10 +3652,17 @@ export const useStore = create<Store>((set, get) => {
     try {
       const s = get()
       const model = s.vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
-      const density = s.vaultSettings.flashcardDensity
+      const o = s.flashcardGenOptions
       // Avoid re-creating cards already saved for this note.
       const existing = cardIdentifiers(s.flashcardDeckByNote[notePath]?.cards ?? [])
-      const result = await window.zen.generateFlashcards(notePath, { model, density, existing })
+      const result = await window.zen.generateFlashcards(notePath, {
+        model,
+        density: o.density,
+        cardMix: o.cardMix,
+        maxCards: o.maxCards ?? undefined,
+        instructions: o.instructions,
+        existing
+      })
       set({
         flashcardDraftCards: result.drafts,
         flashcardDraftKept: result.drafts.map(() => true),
@@ -3632,13 +3689,20 @@ export const useStore = create<Store>((set, get) => {
     try {
       const s = get()
       const model = s.vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
-      const density = s.vaultSettings.flashcardDensity
+      const o = s.flashcardGenOptions
       // Exclude everything already on screen plus the saved deck.
       const existing = cardIdentifiers([
         ...s.flashcardDraftCards,
         ...(s.flashcardDeckByNote[notePath]?.cards ?? [])
       ])
-      const result = await window.zen.generateFlashcards(notePath, { model, density, existing })
+      const result = await window.zen.generateFlashcards(notePath, {
+        model,
+        density: o.density,
+        cardMix: o.cardMix,
+        maxCards: o.maxCards ?? undefined,
+        instructions: o.instructions,
+        existing
+      })
       set((prev) => ({
         flashcardDraftCards: [...prev.flashcardDraftCards, ...result.drafts],
         flashcardDraftKept: [...prev.flashcardDraftKept, ...result.drafts.map(() => true)],
@@ -3655,6 +3719,32 @@ export const useStore = create<Store>((set, get) => {
           : 'Could not generate more cards. Try again.'
       })
     }
+  },
+
+  addManualCard: () => {
+    // A blank recall/cued card is the simplest contract-valid starting point;
+    // the user fills it in (and can switch it to synthesis) via the edit form.
+    const blank: FlashcardDraft = {
+      kind: 'recall',
+      subtype: 'cued',
+      front: '',
+      back: '',
+      concepts: [''],
+      prerequisites: [],
+      difficulty: 3
+    }
+    let index = 0
+    set((s) => {
+      index = s.flashcardDraftCards.length
+      return {
+        // Manual authoring always happens on the reviewing surface.
+        flashcardGenStatus: 'reviewing',
+        flashcardDraftCards: [...s.flashcardDraftCards, blank],
+        flashcardDraftKept: [...s.flashcardDraftKept, true],
+        flashcardDraftEdited: [...s.flashcardDraftEdited, true]
+      }
+    })
+    return index
   },
 
   updateDraftCard: (index, patch) => {
@@ -3683,10 +3773,28 @@ export const useStore = create<Store>((set, get) => {
     const drafts = get().flashcardDraftCards
     const edited = get().flashcardDraftEdited
     const model = get().vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
-    const accepted = acceptedIndexes
-      .filter((i) => i >= 0 && i < drafts.length)
-      .map((i) => draftToCard(drafts[i], model, { userEdited: edited[i] ?? false }))
-    if (accepted.length === 0) return
+    // Re-validate every accepted draft against the card contract before saving —
+    // this guards hand-authored and post-edit cards (e.g. a manual synthesis card
+    // missing its rubric, or an emptied front) so the deck stays well-formed.
+    const accepted: ReturnType<typeof draftToCard>[] = []
+    let invalid = 0
+    for (const i of acceptedIndexes) {
+      if (i < 0 || i >= drafts.length) continue
+      const valid = normalizeDraft(drafts[i])
+      if (!valid) {
+        invalid++
+        continue
+      }
+      accepted.push(draftToCard(valid, model, { userEdited: edited[i] ?? false }))
+    }
+    if (accepted.length === 0) {
+      set({
+        flashcardGenError: invalid
+          ? `Nothing saved — ${invalid} card${invalid === 1 ? '' : 's'} ${invalid === 1 ? 'is' : 'are'} incomplete (check front/back, a focus concept, and a rubric on synthesis cards).`
+          : null
+      })
+      return
+    }
     try {
       const existing = get().flashcardDeckByNote[notePath] ?? (await window.zen.readFlashcards(notePath))
       const base = existing ?? emptyDeck(notePath)
@@ -3697,7 +3805,10 @@ export const useStore = create<Store>((set, get) => {
         flashcardDraftCards: [],
         flashcardDraftKept: [],
         flashcardDraftEdited: [],
-        flashcardGenStatus: 'idle'
+        flashcardGenStatus: 'idle',
+        flashcardGenError: invalid
+          ? `Saved ${accepted.length} card${accepted.length === 1 ? '' : 's'}; skipped ${invalid} incomplete one${invalid === 1 ? '' : 's'}.`
+          : null
       }))
     } catch (err) {
       console.error('saveReviewedFlashcards failed', err)
