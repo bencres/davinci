@@ -9,7 +9,9 @@ import {
   DEFAULT_WEEKLY_NOTES_DIRECTORY,
   DEFAULT_FLASHCARD_MODEL,
   DEFAULT_FLASHCARD_DENSITY,
-  DEFAULT_FLASHCARD_GUIDANCE
+  DEFAULT_FLASHCARD_GUIDANCE,
+  DEFAULT_FLASHCARD_NEW_PER_DAY,
+  DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
 } from '@shared/ipc'
 import type {
   AppUpdateState,
@@ -1638,6 +1640,53 @@ export function SettingsModal(): JSX.Element {
                   Reset to default
                 </button>
               </div>
+            </div>
+          </Section>
+
+          <Section
+            title="Daily review limits"
+            description="Caps for a spaced-repetition session: how many new cards to introduce and how many reviews to schedule per day (Anki-style). Learning cards that are due are never capped."
+          >
+            <div
+              className="flex flex-wrap items-end gap-6 px-5 py-5"
+              {...settingsSearchTargetProps('flashcard-daily-limits')}
+            >
+              <label className="flex flex-col gap-1.5 text-xs font-medium text-ink-700">
+                New cards / day
+                <input
+                  type="number"
+                  min={0}
+                  value={vaultSettings.flashcardNewPerDay ?? DEFAULT_FLASHCARD_NEW_PER_DAY}
+                  onChange={(e) => {
+                    const n = Math.max(0, Math.round(Number(e.target.value)))
+                    void persistVaultSettings({
+                      ...vaultSettings,
+                      flashcardNewPerDay: Number.isFinite(n) ? n : DEFAULT_FLASHCARD_NEW_PER_DAY
+                    })
+                  }}
+                  className="w-28 rounded-xl border border-paper-300/70 bg-paper-50/75 px-3 py-2 text-sm text-ink-900 outline-none focus:border-accent/45"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-xs font-medium text-ink-700">
+                Reviews / day
+                <input
+                  type="number"
+                  min={0}
+                  value={
+                    vaultSettings.flashcardMaxReviewsPerDay ?? DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
+                  }
+                  onChange={(e) => {
+                    const n = Math.max(0, Math.round(Number(e.target.value)))
+                    void persistVaultSettings({
+                      ...vaultSettings,
+                      flashcardMaxReviewsPerDay: Number.isFinite(n)
+                        ? n
+                        : DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
+                    })
+                  }}
+                  className="w-28 rounded-xl border border-paper-300/70 bg-paper-50/75 px-3 py-2 text-sm text-ink-900 outline-none focus:border-accent/45"
+                />
+              </label>
             </div>
           </Section>
         </div>

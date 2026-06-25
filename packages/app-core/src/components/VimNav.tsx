@@ -206,6 +206,16 @@ export function VimNav(): JSX.Element | null {
           keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyEdit'),
           label: 'Edit saved cards',
           detail: "Open the note's saved cards to edit, delete, or add more."
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyReview'),
+          label: 'Review due cards',
+          detail: 'Start a spaced-repetition session over all due cards in the vault.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyReviewNote'),
+          label: "Review this note's deck",
+          detail: "Study just the active note's due cards."
         }
       ]
     }
@@ -825,6 +835,27 @@ export function VimNav(): JSX.Element | null {
         if (matchesSequenceToken(e, overrides, 'vim.leaderStudyCustom')) return openStudy('custom')
         if (matchesSequenceToken(e, overrides, 'vim.leaderStudyManual')) return openStudy('manual')
         if (matchesSequenceToken(e, overrides, 'vim.leaderStudyEdit')) return openStudy('edit')
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyReview')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          void state.startStudySession({ kind: 'all' })
+          return
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyReviewNote')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          if (active) void state.startStudySession({ kind: 'note', notePath: active.path })
+          return
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyDashboard')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          void state.openStudyDashboard()
+          return
+        }
         resetLeader()
       }
 
@@ -1864,6 +1895,9 @@ export function VimNav(): JSX.Element | null {
       // Tasks is a top-level sidebar row that opens the vault-wide Tasks
       // tab in the active pane. Matches clicking the row.
       void state.openTasksView()
+    } else if (itemType === 'study') {
+      // Study row opens the gamified study dashboard. Matches clicking the row.
+      void state.openStudyDashboard()
     } else if (itemType === 'help') {
       void state.openHelpView()
     } else if (itemType === 'settings') {

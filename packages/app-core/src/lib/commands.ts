@@ -241,6 +241,39 @@ export function buildCommands(options?: { includeUnavailable?: boolean }): Comma
       }
     },
     {
+      id: 'study.global',
+      title: 'Study: Review Due Cards (All Decks)',
+      category: 'Note',
+      keywords: 'study review due cards spaced repetition srs fsrs anki flashcard quiz learn',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyReview')}`,
+      run: async () => {
+        await getState().startStudySession({ kind: 'all' })
+      }
+    },
+    {
+      id: 'study.note',
+      title: "Study: Review This Note's Deck",
+      category: 'Note',
+      keywords: 'study review note deck due cards spaced repetition srs fsrs flashcard',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyReviewNote')}`,
+      when: () => !!getState().activeNote,
+      run: async () => {
+        const s = getState()
+        if (!s.activeNote) return
+        await s.startStudySession({ kind: 'note', notePath: s.activeNote.path })
+      }
+    },
+    {
+      id: 'study.dashboard',
+      title: 'Study: Open Dashboard',
+      category: 'Note',
+      keywords: 'study dashboard streak goal heatmap mastery progress gamify stats home hub spaced repetition flashcard',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyDashboard')}`,
+      run: async () => {
+        await getState().openStudyDashboard()
+      }
+    },
+    {
       id: 'note.new.here',
       title: 'New Note in Current Folder',
       category: 'Note',

@@ -58,6 +58,9 @@ export type KeymapId =
   | "vim.leaderStudyCustom"
   | "vim.leaderStudyManual"
   | "vim.leaderStudyEdit"
+  | "vim.leaderStudyReview"
+  | "vim.leaderStudyReviewNote"
+  | "vim.leaderStudyDashboard"
   | "vim.panePrefix"
   | "vim.paneFocusLeft"
   | "vim.paneFocusDown"
@@ -101,7 +104,13 @@ export type KeymapId =
   | "flashcards.reviewToggleKeep"
   | "flashcards.reviewEdit"
   | "flashcards.reviewRegenerate"
-  | "flashcards.reviewSave";
+  | "flashcards.reviewSave"
+  | "study.flip"
+  | "study.rateAgain"
+  | "study.rateHard"
+  | "study.rateGood"
+  | "study.rateEasy"
+  | "study.jumpSource";
 
 export type KeymapOverrides = Partial<Record<KeymapId, string>>;
 
@@ -608,6 +617,39 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     maxTokens: 1,
   },
   {
+    id: "vim.leaderStudyReview",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: review due cards",
+    description: "Start a spaced-repetition session over all due cards in the vault.",
+    defaultBinding: "s",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyReviewNote",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: review this note's deck",
+    description: "Start a spaced-repetition session over the active note's deck.",
+    defaultBinding: "d",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyDashboard",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: open dashboard",
+    description: "Open the gamified study dashboard (streak, goal, mastery).",
+    defaultBinding: "h",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
     id: "vim.panePrefix",
     kind: "sequence",
     scope: "pane",
@@ -1068,6 +1110,66 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     title: "Study review: save kept cards",
     description: "Save the kept draft cards to the note's deck.",
     defaultBinding: "Mod+S",
+  },
+  {
+    id: "study.flip",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study: flip / reveal answer",
+    description: "Reveal the answer (or rubric) for the current study card.",
+    defaultBinding: "Space",
+    maxTokens: 1,
+  },
+  {
+    id: "study.rateAgain",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study: rate Again",
+    description: "Predict (before reveal) or grade (after reveal) the card as Again.",
+    defaultBinding: "1",
+    maxTokens: 1,
+  },
+  {
+    id: "study.rateHard",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study: rate Hard",
+    description: "Predict (before reveal) or grade (after reveal) the card as Hard.",
+    defaultBinding: "2",
+    maxTokens: 1,
+  },
+  {
+    id: "study.rateGood",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study: rate Good",
+    description: "Predict (before reveal) or grade (after reveal) the card as Good.",
+    defaultBinding: "3",
+    maxTokens: 1,
+  },
+  {
+    id: "study.rateEasy",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study: rate Easy",
+    description: "Predict (before reveal) or grade (after reveal) the card as Easy.",
+    defaultBinding: "4",
+    maxTokens: 1,
+  },
+  {
+    id: "study.jumpSource",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study: jump to source",
+    description: "Open the source note at the current card's quoted passage.",
+    defaultBinding: "o",
+    maxTokens: 1,
   },
 ];
 
