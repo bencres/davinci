@@ -75,6 +75,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
   const title = flashcardsTitleFromTab(tabPath)
 
   const reviewNote = useStore((s) => s.flashcardReviewNote)
+  const reviewMode = useStore((s) => s.flashcardReviewMode)
   const drafts = useStore((s) => s.flashcardDraftCards)
   const kept = useStore((s) => s.flashcardDraftKept)
   const status = useStore((s) => s.flashcardGenStatus)
@@ -214,7 +215,8 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
         setEditingIndex((cur) => (cur === safeFocus ? null : safeFocus))
         return
       }
-      if (seq('flashcards.reviewRegenerate')) {
+      // Regenerate replaces the whole batch — disallow while editing a saved deck.
+      if (reviewMode !== 'edit' && seq('flashcards.reviewRegenerate')) {
         consume()
         setEditingIndex(null)
         void generateForActive()
@@ -225,6 +227,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
   }, [
     isActive,
     isReviewTarget,
+    reviewMode,
     keymapOverrides,
     vimMode,
     drafts.length,
@@ -416,7 +419,10 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
           <>
             <div className="flex items-center justify-between gap-3">
               <div className="text-sm text-ink-600">
-                Review, edit, and keep the cards you want. {dropped > 0 && (
+                {reviewMode === 'edit'
+                  ? 'Edit saved cards; discard any to delete them on save, or add new ones. '
+                  : 'Review, edit, and keep the cards you want. '}
+                {dropped > 0 && (
                   <span className="text-ink-500">{dropped} card{dropped === 1 ? '' : 's'} dropped as invalid.</span>
                 )}
                 {error && <span className="text-[rgb(var(--z-red))]"> {error}</span>}
@@ -442,14 +448,16 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                 >
                   {genMoreLoading ? 'Generating…' : 'Generate more'}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void generateForActive()}
-                  disabled={genMoreLoading}
-                  className="rounded-lg border border-paper-300/70 bg-paper-100/80 px-3 py-1.5 text-xs font-medium text-ink-800 hover:bg-paper-200 disabled:cursor-default disabled:text-ink-400"
-                >
-                  Regenerate
-                </button>
+                {reviewMode !== 'edit' && (
+                  <button
+                    type="button"
+                    onClick={() => void generateForActive()}
+                    disabled={genMoreLoading}
+                    className="rounded-lg border border-paper-300/70 bg-paper-100/80 px-3 py-1.5 text-xs font-medium text-ink-800 hover:bg-paper-200 disabled:cursor-default disabled:text-ink-400"
+                  >
+                    Regenerate
+                  </button>
+                )}
               </div>
             </div>
 
@@ -746,8 +754,9 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
           </div>
         )}
 
-        {/* Saved deck (always shown when present, e.g. after save or on revisit). */}
-        {savedDeck && savedDeck.cards.length > 0 && (
+        {/* Saved deck (shown when present — but not while editing it, since the
+            same cards are already on the editable surface above). */}
+        {savedDeck && savedDeck.cards.length > 0 && !(isReviewTarget && status === 'reviewing' && reviewMode === 'edit') && (
           <section className="flex flex-col gap-2">
             <div className="text-sm font-medium text-ink-700">
               Saved deck · {savedDeck.cards.length} card{savedDeck.cards.length === 1 ? '' : 's'}

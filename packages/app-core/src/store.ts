@@ -38,6 +38,7 @@ import {
   emptyDeck,
   flashcardsTabPath,
   normalizeDraft,
+  type Flashcard,
   type FlashcardDeck,
   type FlashcardDraft
 } from '@shared/flashcards'
@@ -1617,8 +1618,12 @@ export function isQuickNotesViewActive(state: {
   return leaf?.activeTab === QUICK_NOTES_TAB_PATH
 }
 
-/** How a flashcard review tab was opened. */
-export type FlashcardReviewMode = 'quick' | 'custom' | 'manual'
+/**
+ * How a flashcard review tab was opened. `edit` loads the note's saved deck into
+ * the editable surface and, on save, REPLACES the deck (preserving card identity)
+ * rather than appending like the generation modes.
+ */
+export type FlashcardReviewMode = 'quick' | 'custom' | 'manual' | 'edit'
 
 /** One-off generation options edited in the custom-generation form. */
 export interface FlashcardGenOptions {
@@ -1807,12 +1812,20 @@ interface Store {
   // --- Flashcards (Phase 1) ---
   /** The note whose review tab is currently open (drives FlashcardReviewView). */
   flashcardReviewNote: string | null
+  /** How the current review tab was opened (drives append-vs-replace on save). */
+  flashcardReviewMode: FlashcardReviewMode
   /** Current review batch of draft cards returned by Claude (edited in place). */
   flashcardDraftCards: FlashcardDraft[]
   /** Per-draft keep/discard toggles, parallel to `flashcardDraftCards`. */
   flashcardDraftKept: boolean[]
   /** Per-draft "user edited during review" flags, parallel to `flashcardDraftCards`. */
   flashcardDraftEdited: boolean[]
+  /**
+   * Per-draft origin card, parallel to `flashcardDraftCards`. Set when editing an
+   * existing deck so a saved card keeps its `id`/`srs`/`createdAt` on save; `null`
+   * for freshly generated or hand-authored drafts.
+   */
+  flashcardDraftOrigin: (Flashcard | null)[]
   /** Loaded saved decks keyed by source note path. */
   flashcardDeckByNote: Record<string, FlashcardDeck>
   /** `configuring` = custom-generation form before a run; `reviewing` = card list. */
@@ -3211,9 +3224,11 @@ export const useStore = create<Store>((set, get) => {
   databases: {},
   databasesLoading: {},
   flashcardReviewNote: null,
+  flashcardReviewMode: 'quick',
   flashcardDraftCards: [],
   flashcardDraftKept: [],
   flashcardDraftEdited: [],
+  flashcardDraftOrigin: [],
   flashcardDeckByNote: {},
   flashcardGenStatus: 'idle',
   flashcardGenError: null,
@@ -3617,13 +3632,15 @@ export const useStore = create<Store>((set, get) => {
     const vs = get().vaultSettings
     set({
       flashcardReviewNote: notePath,
-      // `manual` lands straight on an empty review list; the others reset to idle
+      flashcardReviewMode: mode,
+      // `manual`/`edit` land straight on the review list; the others reset to idle
       // until generation runs (quick) or the user submits the form (custom).
-      flashcardGenStatus: mode === 'manual' ? 'reviewing' : 'idle',
+      flashcardGenStatus: mode === 'manual' || mode === 'edit' ? 'reviewing' : 'idle',
       flashcardGenError: null,
       flashcardDraftCards: [],
       flashcardDraftKept: [],
       flashcardDraftEdited: [],
+      flashcardDraftOrigin: [],
       flashcardDropped: 0,
       flashcardGenOptions: {
         density: vs.flashcardDensity ?? DEFAULT_FLASHCARD_DENSITY,
@@ -3641,6 +3658,24 @@ export const useStore = create<Store>((set, get) => {
       await get().generateFlashcardsForActiveNote()
     } else if (mode === 'custom') {
       set({ flashcardGenStatus: 'configuring' })
+    } else if (mode === 'edit') {
+      // Load the saved deck into the editable surface; each draft keeps a link to
+      // its origin card so its identity (id/srs/createdAt) survives the save.
+      const saved = get().flashcardDeckByNote[notePath]?.cards ?? []
+      const cards: FlashcardDraft[] = []
+      const origin: (Flashcard | null)[] = []
+      for (const card of saved) {
+        const draft = normalizeDraft(card)
+        if (!draft) continue
+        cards.push(draft)
+        origin.push(card)
+      }
+      set({
+        flashcardDraftCards: cards,
+        flashcardDraftKept: cards.map(() => true),
+        flashcardDraftEdited: cards.map(() => false),
+        flashcardDraftOrigin: origin
+      })
     }
   },
 
@@ -3672,6 +3707,7 @@ export const useStore = create<Store>((set, get) => {
         flashcardDraftCards: result.drafts,
         flashcardDraftKept: result.drafts.map(() => true),
         flashcardDraftEdited: result.drafts.map(() => false),
+        flashcardDraftOrigin: result.drafts.map(() => null),
         flashcardDropped: result.dropped,
         flashcardGenStatus: 'reviewing',
         flashcardGenError: null
@@ -3713,6 +3749,7 @@ export const useStore = create<Store>((set, get) => {
         flashcardDraftCards: [...prev.flashcardDraftCards, ...result.drafts],
         flashcardDraftKept: [...prev.flashcardDraftKept, ...result.drafts.map(() => true)],
         flashcardDraftEdited: [...prev.flashcardDraftEdited, ...result.drafts.map(() => false)],
+        flashcardDraftOrigin: [...prev.flashcardDraftOrigin, ...result.drafts.map(() => null)],
         flashcardGenMoreLoading: false
       }))
     } catch (err) {
@@ -3747,7 +3784,8 @@ export const useStore = create<Store>((set, get) => {
         flashcardGenStatus: 'reviewing',
         flashcardDraftCards: [...s.flashcardDraftCards, blank],
         flashcardDraftKept: [...s.flashcardDraftKept, true],
-        flashcardDraftEdited: [...s.flashcardDraftEdited, true]
+        flashcardDraftEdited: [...s.flashcardDraftEdited, true],
+        flashcardDraftOrigin: [...s.flashcardDraftOrigin, null]
       }
     })
     return index
@@ -3778,11 +3816,13 @@ export const useStore = create<Store>((set, get) => {
     if (!notePath) return
     const drafts = get().flashcardDraftCards
     const edited = get().flashcardDraftEdited
+    const origin = get().flashcardDraftOrigin
+    const editingDeck = get().flashcardReviewMode === 'edit'
     const model = get().vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
     // Re-validate every accepted draft against the card contract before saving —
     // this guards hand-authored and post-edit cards (e.g. a manual synthesis card
     // missing its rubric, or an emptied front) so the deck stays well-formed.
-    const accepted: ReturnType<typeof draftToCard>[] = []
+    const accepted: Flashcard[] = []
     let invalid = 0
     for (const i of acceptedIndexes) {
       if (i < 0 || i >= drafts.length) continue
@@ -3791,7 +3831,22 @@ export const useStore = create<Store>((set, get) => {
         invalid++
         continue
       }
-      accepted.push(draftToCard(valid, model, { userEdited: edited[i] ?? false }))
+      const from = origin[i]
+      if (from) {
+        // Editing a saved card: keep its identity + scheduling state, take the
+        // edited content from `valid` (so e.g. a synthesis→recall switch drops the
+        // old rubric instead of leaving it stale).
+        accepted.push({
+          ...valid,
+          id: from.id,
+          srs: from.srs,
+          createdAt: from.createdAt,
+          generatedBy: from.generatedBy,
+          userEdited: from.userEdited || (edited[i] ?? false)
+        })
+      } else {
+        accepted.push(draftToCard(valid, model, { userEdited: edited[i] ?? false }))
+      }
     }
     if (accepted.length === 0) {
       set({
@@ -3804,13 +3859,17 @@ export const useStore = create<Store>((set, get) => {
     try {
       const existing = get().flashcardDeckByNote[notePath] ?? (await window.zen.readFlashcards(notePath))
       const base = existing ?? emptyDeck(notePath)
-      const merged: FlashcardDeck = { ...base, cards: [...base.cards, ...accepted] }
+      // Edit mode REPLACES the deck with the kept set (so discarded cards are
+      // removed); generation/manual modes APPEND to whatever is already saved.
+      const cards = editingDeck ? accepted : [...base.cards, ...accepted]
+      const merged: FlashcardDeck = { ...base, cards }
       const saved = await window.zen.writeFlashcards(notePath, merged)
       set((s) => ({
         flashcardDeckByNote: { ...s.flashcardDeckByNote, [notePath]: saved },
         flashcardDraftCards: [],
         flashcardDraftKept: [],
         flashcardDraftEdited: [],
+        flashcardDraftOrigin: [],
         flashcardGenStatus: 'idle',
         flashcardGenError: invalid
           ? `Saved ${accepted.length} card${accepted.length === 1 ? '' : 's'}; skipped ${invalid} incomplete one${invalid === 1 ? '' : 's'}.`

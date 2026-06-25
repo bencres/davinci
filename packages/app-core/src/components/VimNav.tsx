@@ -201,6 +201,11 @@ export function VimNav(): JSX.Element | null {
           keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyManual'),
           label: 'Manual cards',
           detail: 'Hand-author your own study cards.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyEdit'),
+          label: 'Edit saved cards',
+          detail: "Open the note's saved cards to edit, delete, or add more."
         }
       ]
     }
@@ -810,7 +815,7 @@ export function VimNav(): JSX.Element | null {
 
       if (leaderPending.current === 'leader-g') {
         const active = state.activeNote
-        const openStudy = (mode: 'quick' | 'custom' | 'manual'): void => {
+        const openStudy = (mode: 'quick' | 'custom' | 'manual' | 'edit'): void => {
           e.preventDefault()
           e.stopImmediatePropagation()
           resetLeader()
@@ -819,6 +824,7 @@ export function VimNav(): JSX.Element | null {
         if (matchesSequenceToken(e, overrides, 'vim.leaderStudyQuick')) return openStudy('quick')
         if (matchesSequenceToken(e, overrides, 'vim.leaderStudyCustom')) return openStudy('custom')
         if (matchesSequenceToken(e, overrides, 'vim.leaderStudyManual')) return openStudy('manual')
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyEdit')) return openStudy('edit')
         resetLeader()
       }
 

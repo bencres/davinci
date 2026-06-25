@@ -228,6 +228,19 @@ export function buildCommands(options?: { includeUnavailable?: boolean }): Comma
       }
     },
     {
+      id: 'flashcards.edit',
+      title: 'Study: Edit Saved Cards for This Note',
+      category: 'Note',
+      keywords: 'study flashcard edit modify delete saved deck cards revise',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyEdit')}`,
+      when: () => !!getState().activeNote,
+      run: async () => {
+        const s = getState()
+        if (!s.activeNote) return
+        await s.openFlashcardReview(s.activeNote.path, 'edit')
+      }
+    },
+    {
       id: 'note.new.here',
       title: 'New Note in Current Folder',
       category: 'Note',

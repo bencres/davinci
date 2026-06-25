@@ -57,6 +57,7 @@ export type KeymapId =
   | "vim.leaderStudyQuick"
   | "vim.leaderStudyCustom"
   | "vim.leaderStudyManual"
+  | "vim.leaderStudyEdit"
   | "vim.panePrefix"
   | "vim.paneFocusLeft"
   | "vim.paneFocusDown"
@@ -592,6 +593,17 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     title: "Study group: manual cards",
     description: "Hand-author your own study cards for the active note.",
     defaultBinding: "m",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyEdit",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: edit saved cards",
+    description: "Open the note's saved study cards to edit, delete, or add more.",
+    defaultBinding: "e",
     vimOnly: true,
     maxTokens: 1,
   },

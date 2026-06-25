@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { FlashcardDeck, FlashcardDraft } from '@shared/flashcards'
+import type { Flashcard, FlashcardDeck, FlashcardDraft, SrsState } from '@shared/flashcards'
 
 const NOTE = 'inbox/Topic.md'
 
@@ -197,6 +197,60 @@ describe('flashcards store slice', () => {
     await useStore.getState().generateFlashcardsForActiveNote()
     await useStore.getState().saveReviewedFlashcards([])
     expect(writeMock).not.toHaveBeenCalled()
+  })
+
+  it('edit mode loads the saved deck, preserves identity, and replaces on save', async () => {
+    const { useStore } = await loadStore()
+    const srs: SrsState = {
+      state: 'review',
+      due: '2026-07-01T00:00:00.000Z',
+      stability: 3.2,
+      difficulty: 5.1,
+      reps: 4,
+      lapses: 1,
+      lastReview: '2026-06-20T00:00:00.000Z'
+    }
+    const c1: Flashcard = {
+      ...recallDraft,
+      id: 'card-1',
+      srs,
+      userEdited: false,
+      createdAt: 111,
+      generatedBy: 'claude-x'
+    }
+    const c2: Flashcard = {
+      ...synthesisDraft,
+      id: 'card-2',
+      srs: { ...srs, reps: 9 },
+      userEdited: true,
+      createdAt: 222,
+      generatedBy: 'claude-y'
+    }
+    const deck: FlashcardDeck = { version: 1, sourceNotePath: NOTE, cards: [c1, c2] }
+    // Seed the cached deck so edit mode has something to load (readFlashcards → null).
+    useStore.setState({ flashcardDeckByNote: { [NOTE]: deck } })
+
+    await useStore.getState().openFlashcardReview(NOTE, 'edit')
+    const opened = useStore.getState()
+    expect(opened.flashcardReviewMode).toBe('edit')
+    expect(opened.flashcardGenStatus).toBe('reviewing')
+    expect(opened.flashcardDraftCards).toHaveLength(2)
+    expect(opened.flashcardDraftOrigin.map((o) => o?.id)).toEqual(['card-1', 'card-2'])
+
+    // Edit card 0 and keep only it — card 1 is dropped (delete on save).
+    useStore.getState().updateDraftCard(0, { front: 'Edited front' })
+    await useStore.getState().saveReviewedFlashcards([0])
+
+    expect(writeMock).toHaveBeenCalledTimes(1)
+    const [, savedDeck] = writeMock.mock.calls[0] as [string, FlashcardDeck]
+    // Replaced, not appended: only the kept card remains.
+    expect(savedDeck.cards).toHaveLength(1)
+    const saved = savedDeck.cards[0]
+    expect(saved.id).toBe('card-1') // identity preserved
+    expect(saved.front).toBe('Edited front') // edit applied
+    expect(saved.srs).toEqual(srs) // scheduling state preserved
+    expect(saved.createdAt).toBe(111) // createdAt preserved
+    expect(saved.userEdited).toBe(true) // flagged as edited
   })
 
   it('surfaces a friendly message when generation reports no API key', async () => {
