@@ -83,7 +83,8 @@ describe('flashcards store slice', () => {
         density: 'thorough',
         cardMix: 'synthesis',
         instructions: 'be terse',
-        maxCards: 7
+        maxCards: 7,
+        crossNote: false
       }
     })
     await useStore.getState().generateFlashcardsForActiveNote()
@@ -103,6 +104,29 @@ describe('flashcards store slice', () => {
     expect(s.flashcardDraftCards).toHaveLength(2)
     expect(s.flashcardDraftKept).toEqual([true, true])
     expect(s.flashcardDropped).toBe(1)
+  })
+
+  it('cross-note generation resolves related notes from wiki-links', async () => {
+    const { useStore } = await loadStore()
+    useStore.setState({
+      flashcardReviewNote: NOTE,
+      notes: [
+        { path: NOTE, title: 'Topic', folder: 'inbox', wikilinks: ['Other'] },
+        { path: 'inbox/Other.md', title: 'Other', folder: 'inbox', wikilinks: [] }
+      ] as never,
+      flashcardGenOptions: {
+        density: 'balanced',
+        cardMix: 'balanced',
+        instructions: '',
+        maxCards: null,
+        crossNote: true
+      }
+    })
+    await useStore.getState().generateFlashcardsForActiveNote()
+    expect(generateMock).toHaveBeenCalledWith(
+      NOTE,
+      expect.objectContaining({ relatedNotePaths: ['inbox/Other.md'] })
+    )
   })
 
   it('custom mode opens the config form without generating; manual opens an empty list', async () => {

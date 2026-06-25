@@ -274,6 +274,29 @@ export function buildCommands(options?: { includeUnavailable?: boolean }): Comma
       }
     },
     {
+      id: 'study.crossNote',
+      title: 'Study: Generate Cross-Note Synthesis Cards',
+      category: 'Note',
+      keywords: 'study cross note synthesis generate flashcard wikilink related connect concepts transfer',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyCrossNote')}`,
+      when: () => !!getState().activeNote,
+      run: async () => {
+        const s = getState()
+        if (!s.activeNote) return
+        await s.openFlashcardReview(s.activeNote.path, 'cross')
+      }
+    },
+    {
+      id: 'study.graph',
+      title: 'Study: Open Concept Graph',
+      category: 'Note',
+      keywords: 'study concept knowledge graph prerequisite dependency map mastery gaps spaced repetition flashcard',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyGraph')}`,
+      run: async () => {
+        await getState().openConceptGraph()
+      }
+    },
+    {
       id: 'note.new.here',
       title: 'New Note in Current Folder',
       category: 'Note',

@@ -58,9 +58,11 @@ export type KeymapId =
   | "vim.leaderStudyCustom"
   | "vim.leaderStudyManual"
   | "vim.leaderStudyEdit"
+  | "vim.leaderStudyCrossNote"
   | "vim.leaderStudyReview"
   | "vim.leaderStudyReviewNote"
   | "vim.leaderStudyDashboard"
+  | "vim.leaderStudyGraph"
   | "vim.panePrefix"
   | "vim.paneFocusLeft"
   | "vim.paneFocusDown"
@@ -617,6 +619,17 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     maxTokens: 1,
   },
   {
+    id: "vim.leaderStudyCrossNote",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: cross-note synthesis",
+    description: "Generate synthesis cards connecting this note to its wiki-linked notes.",
+    defaultBinding: "x",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
     id: "vim.leaderStudyReview",
     kind: "sequence",
     scope: "leader",
@@ -646,6 +659,17 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     title: "Study group: open dashboard",
     description: "Open the gamified study dashboard (streak, goal, mastery).",
     defaultBinding: "h",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyGraph",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: open concept graph",
+    description: "Open the concept (knowledge) graph: prerequisites, mastery, and gaps.",
+    defaultBinding: "k",
     vimOnly: true,
     maxTokens: 1,
   },

@@ -37,6 +37,7 @@ import {
   buildCardIndex,
   countDailyProgress,
   draftToCard,
+  CONCEPT_GRAPH_TAB_PATH,
   emptyDeck,
   flashcardsTabPath,
   isStudyTabPath,
@@ -52,7 +53,8 @@ import {
   type ReviewGrade,
   type ReviewLogFile
 } from '@shared/flashcards'
-import { selectDueQueue, type CardIndex } from '@shared/srs'
+import { selectDueQueue, shapeSession, type CardIndex } from '@shared/srs'
+import { buildConceptGraph, type ConceptGraph } from '@shared/concept-graph'
 import {
   computeStudyStats,
   DEFAULT_STUDY_GAMIFICATION,
@@ -60,6 +62,7 @@ import {
   type StudyStats
 } from '@shared/study-stats'
 import { schedule } from './lib/srs-scheduler'
+import { backlinksForNote, resolveWikilinkTarget } from './lib/wikilinks'
 import {
   DEFAULT_FLASHCARD_MODEL,
   DEFAULT_FLASHCARD_DENSITY,
@@ -1593,6 +1596,15 @@ export function isStudyDashboardActive(state: {
   return leaf?.activeTab === STUDY_DASHBOARD_TAB_PATH
 }
 
+/** True when the active pane's active tab is the concept (knowledge) graph. */
+export function isConceptGraphActive(state: {
+  paneLayout: PaneLayout
+  activePaneId: string
+}): boolean {
+  const leaf = findLeaf(state.paneLayout, state.activePaneId)
+  return leaf?.activeTab === CONCEPT_GRAPH_TAB_PATH
+}
+
 /** True when the active pane's active tab is the vault-wide Tags view. */
 export function isTagsViewActive(state: {
   paneLayout: PaneLayout
@@ -1652,7 +1664,7 @@ export function isQuickNotesViewActive(state: {
  * the editable surface and, on save, REPLACES the deck (preserving card identity)
  * rather than appending like the generation modes.
  */
-export type FlashcardReviewMode = 'quick' | 'custom' | 'manual' | 'edit'
+export type FlashcardReviewMode = 'quick' | 'custom' | 'manual' | 'edit' | 'cross'
 
 /** One-off generation options edited in the custom-generation form. */
 export interface FlashcardGenOptions {
@@ -1662,10 +1674,15 @@ export interface FlashcardGenOptions {
   instructions: string
   /** Soft target for card count; null = use the per-run cap. */
   maxCards: number | null
+  /** Also generate cross-note synthesis cards from wiki-linked related notes. */
+  crossNote: boolean
 }
 
-/** What a study session draws cards from: the whole vault, or one note's deck. */
-export type StudyScope = { kind: 'all' } | { kind: 'note'; notePath: string }
+/** What a study session draws cards from: the whole vault, one note's deck, or one concept. */
+export type StudyScope =
+  | { kind: 'all' }
+  | { kind: 'note'; notePath: string }
+  | { kind: 'concept'; concept: string }
 
 /**
  * Study-session phase. `front` shows the prompt (and captures the predicted
@@ -2033,6 +2050,16 @@ interface Store {
   loadStudyStats: () => Promise<void>
   /** Persist a new daily-goal target and recompute stats. */
   setStudyDailyGoal: (goal: number) => Promise<void>
+
+  // --- Concept (knowledge) graph ---
+  /** Concept dependency graph (nodes/edges/gaps), null until loaded. */
+  conceptGraph: ConceptGraph | null
+  conceptGraphLoading: boolean
+  conceptGraphError: string | null
+  /** Open (or focus) the concept-graph tab and (re)build the graph. */
+  openConceptGraph: () => Promise<void>
+  /** (Re)build the concept graph from every deck + review log. */
+  loadConceptGraph: () => Promise<void>
 
   /** Rename a record's linked page note to match its title (no-op if unlinked). */
   renameRecordPage: (csvPath: string, rowId: string) => Promise<void>
@@ -2701,6 +2728,22 @@ function cardIdentifiers(cards: { front: string; concepts: string[] }[]): string
   return out
 }
 
+/** Vault-relative paths of notes related to `notePath` (outgoing wiki-links +
+ *  backlinks), for cross-note synthesis generation. Capped for prompt size. */
+function relatedNotePathsFor(notes: NoteMeta[], notePath: string, max = 5): string[] {
+  const current = notes.find((n) => n.path === notePath)
+  if (!current) return []
+  const out = new Set<string>()
+  for (const target of current.wikilinks ?? []) {
+    const resolved = resolveWikilinkTarget(notes, target)
+    if (resolved && resolved.path !== notePath) out.add(resolved.path)
+  }
+  for (const b of backlinksForNote(notes, current)) {
+    if (b.path !== notePath) out.add(b.path)
+  }
+  return [...out].slice(0, max)
+}
+
 function rewriteNoteCommentsPath(
   comments: Record<string, NoteComment[]>,
   oldPath: string,
@@ -3325,7 +3368,8 @@ export const useStore = create<Store>((set, get) => {
     density: DEFAULT_FLASHCARD_DENSITY,
     cardMix: 'balanced',
     instructions: '',
-    maxCards: null
+    maxCards: null,
+    crossNote: false
   },
   studyScope: null,
   studyIndex: null,
@@ -3339,6 +3383,9 @@ export const useStore = create<Store>((set, get) => {
   studyGamification: null,
   studyStatsLoading: false,
   studyStatsError: null,
+  conceptGraph: null,
+  conceptGraphLoading: false,
+  conceptGraphError: null,
   selectedTags: [],
   tagMatchMode: 'all',
   focusedPanel: null,
@@ -3745,7 +3792,8 @@ export const useStore = create<Store>((set, get) => {
         density: vs.flashcardDensity ?? DEFAULT_FLASHCARD_DENSITY,
         cardMix: 'balanced',
         instructions: '',
-        maxCards: null
+        maxCards: null,
+        crossNote: mode === 'cross'
       }
     })
     await get().openNoteInPane(get().activePaneId, flashcardsTabPath(notePath))
@@ -3753,7 +3801,7 @@ export const useStore = create<Store>((set, get) => {
     set({ focusedPanel: 'editor' })
     // Show any previously-saved deck while generating / authoring.
     await get().loadFlashcardDeck(notePath)
-    if (mode === 'quick') {
+    if (mode === 'quick' || mode === 'cross') {
       await get().generateFlashcardsForActiveNote()
     } else if (mode === 'custom') {
       set({ flashcardGenStatus: 'configuring' })
@@ -3793,6 +3841,7 @@ export const useStore = create<Store>((set, get) => {
       const o = s.flashcardGenOptions
       // Avoid re-creating cards already saved for this note.
       const existing = cardIdentifiers(s.flashcardDeckByNote[notePath]?.cards ?? [])
+      const relatedNotePaths = o.crossNote ? relatedNotePathsFor(s.notes, notePath) : undefined
       const result = await window.zen.generateFlashcards(notePath, {
         model,
         density: o.density,
@@ -3800,7 +3849,8 @@ export const useStore = create<Store>((set, get) => {
         maxCards: o.maxCards ?? undefined,
         instructions: o.instructions,
         guidance: s.vaultSettings.flashcardGuidance ?? DEFAULT_FLASHCARD_GUIDANCE,
-        existing
+        existing,
+        relatedNotePaths
       })
       set({
         flashcardDraftCards: result.drafts,
@@ -3835,6 +3885,7 @@ export const useStore = create<Store>((set, get) => {
         ...s.flashcardDraftCards,
         ...(s.flashcardDeckByNote[notePath]?.cards ?? [])
       ])
+      const relatedNotePaths = o.crossNote ? relatedNotePathsFor(s.notes, notePath) : undefined
       const result = await window.zen.generateFlashcards(notePath, {
         model,
         density: o.density,
@@ -3842,7 +3893,8 @@ export const useStore = create<Store>((set, get) => {
         maxCards: o.maxCards ?? undefined,
         instructions: o.instructions,
         guidance: s.vaultSettings.flashcardGuidance ?? DEFAULT_FLASHCARD_GUIDANCE,
-        existing
+        existing,
+        relatedNotePaths
       })
       set((prev) => ({
         flashcardDraftCards: [...prev.flashcardDraftCards, ...result.drafts],
@@ -3995,7 +4047,7 @@ export const useStore = create<Store>((set, get) => {
   },
 
   startStudySession: async (scope) => {
-    const tabPath = scope.kind === 'all' ? STUDY_TAB_PATH : studyTabPath(scope.notePath)
+    const tabPath = scope.kind === 'note' ? studyTabPath(scope.notePath) : STUDY_TAB_PATH
     set({
       studyScope: scope,
       studyPhase: 'loading',
@@ -4011,10 +4063,19 @@ export const useStore = create<Store>((set, get) => {
     ;(document.activeElement as HTMLElement | null)?.blur?.()
     set({ focusedPanel: 'editor' })
     try {
-      // Build the cross-deck index: all decks for the global queue, or one deck.
+      // Build the cross-deck index: one deck for a note scope, all decks for
+      // the global queue or a concept scope (which may span notes).
       const decks: FlashcardDeck[] = []
       const cache = { ...get().flashcardDeckByNote }
-      if (scope.kind === 'all') {
+      if (scope.kind === 'note') {
+        const deck =
+          get().flashcardDeckByNote[scope.notePath] ??
+          (await window.zen.readFlashcards(scope.notePath))
+        if (deck) {
+          decks.push(deck)
+          cache[scope.notePath] = deck
+        }
+      } else {
         const summaries = await window.zen.listFlashcardDecks()
         for (const s of summaries) {
           const deck = await window.zen.readFlashcards(s.sourceNotePath)
@@ -4023,16 +4084,17 @@ export const useStore = create<Store>((set, get) => {
             cache[s.sourceNotePath] = deck
           }
         }
-      } else {
-        const deck =
-          get().flashcardDeckByNote[scope.notePath] ??
-          (await window.zen.readFlashcards(scope.notePath))
-        if (deck) {
-          decks.push(deck)
-          cache[scope.notePath] = deck
-        }
       }
-      const index = buildCardIndex(decks)
+      let index = buildCardIndex(decks)
+      // Concept scope: keep only cards tagged with the concept (case-insensitive).
+      if (scope.kind === 'concept') {
+        const key = scope.concept.trim().toLowerCase()
+        index = Object.fromEntries(
+          Object.entries(index).filter(([, e]) =>
+            e.card.concepts.some((c) => c.trim().toLowerCase() === key)
+          )
+        )
+      }
       // Apply per-day new/review caps (Anki-style). "Done today" comes from each
       // deck's review log — only read those when a finite cap is actually set.
       const vs = get().vaultSettings
@@ -4056,13 +4118,15 @@ export const useStore = create<Store>((set, get) => {
         newDoneToday = progress.newDoneToday
         reviewsDoneToday = progress.reviewsDoneToday
       }
-      const queue = selectDueQueue(index, {
+      const dueQueue = selectDueQueue(index, {
         now,
         newPerDay,
         maxReviewsPerDay,
         newDoneToday,
         reviewsDoneToday
       })
+      // Shape into a session: easy warm-up, interleaved middle, easy cool-down.
+      const queue = shapeSession(dueQueue, index)
       set({
         flashcardDeckByNote: cache,
         studyIndex: index,
@@ -4250,6 +4314,48 @@ export const useStore = create<Store>((set, get) => {
       set({ studyGamification: saved })
     } catch (err) {
       console.error('setStudyDailyGoal failed', err)
+    }
+  },
+
+  openConceptGraph: async () => {
+    await get().openNoteInPane(get().activePaneId, CONCEPT_GRAPH_TAB_PATH)
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    set({ focusedPanel: 'editor' })
+    await get().loadConceptGraph()
+  },
+
+  loadConceptGraph: async () => {
+    set({ conceptGraphLoading: true, conceptGraphError: null })
+    try {
+      // Same cross-deck read the dashboard uses: cards → concepts/prereqs/SRS,
+      // review logs → per-concept accuracy.
+      const decks: FlashcardDeck[] = []
+      const cache = { ...get().flashcardDeckByNote }
+      const summaries = await window.zen.listFlashcardDecks()
+      for (const s of summaries) {
+        const deck = await window.zen.readFlashcards(s.sourceNotePath)
+        if (deck) {
+          decks.push(deck)
+          cache[s.sourceNotePath] = deck
+        }
+      }
+      const logs: ReviewLogFile[] = []
+      for (const s of summaries) {
+        try {
+          const log = await window.zen.readReviewLog(s.sourceNotePath)
+          if (log) logs.push(log)
+        } catch {
+          // a missing/corrupt log just means no recorded history for that note
+        }
+      }
+      const graph = buildConceptGraph(decks, logs, new Date())
+      set({ flashcardDeckByNote: cache, conceptGraph: graph, conceptGraphLoading: false })
+    } catch (err) {
+      console.error('loadConceptGraph failed', err)
+      set({
+        conceptGraphLoading: false,
+        conceptGraphError: err instanceof Error ? err.message : 'Could not load the concept graph.'
+      })
     }
   },
 
