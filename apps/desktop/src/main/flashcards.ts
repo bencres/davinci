@@ -25,6 +25,8 @@ import {
   type FlashcardDeckSummary,
   type FlashcardDraft
 } from '@shared/flashcards'
+import type { FlashcardDensity } from '@shared/ipc'
+import { DEFAULT_FLASHCARD_DENSITY } from '@shared/ipc'
 import { absolutePath, writeFileAtomic } from './vault'
 import { getAnthropicApiKey } from './secret-store'
 
@@ -35,6 +37,23 @@ export const FLASHCARD_MODELS = [
   'claude-haiku-4-5',
   'claude-opus-4-8'
 ] as const
+
+/**
+ * Hard ceiling on cards per generation run. Keeps a long note from producing a
+ * giant review batch (and a giant future-review obligation); the UI offers
+ * "Generate more" as a deliberate second action instead.
+ */
+export const FLASHCARD_MAX_PER_RUN = 20
+
+/** Per-density steer injected into the generation prompt. */
+const DENSITY_GUIDANCE: Record<FlashcardDensity, string> = {
+  concise:
+    'DENSITY: concise. Test ONLY the most essential, load-bearing concepts. A handful of high-value cards is the goal — skip secondary detail.',
+  balanced:
+    'DENSITY: balanced. Cover each key concept once, adding a synthesis card only where transfer is genuinely valuable.',
+  thorough:
+    'DENSITY: thorough. Cover every distinct concept in the note, pairing recall with synthesis where it aids transfer — but still no padding.'
+}
 
 /** Typed error the renderer maps to a "Set your key in Settings" prompt. */
 export class MissingAnthropicKeyError extends Error {
@@ -193,6 +212,8 @@ Return ONLY a raw JSON array of card objects — no prose, no markdown fences, n
 
 ATOMICITY: every card tests ONE focus concept and ONE thing, gradeable in isolation. Keep concepts <= 3 and prerequisites <= 3, all as short labels. Put complexity in the prerequisite/concept graph, not in fat cards.
 
+HOW MANY CARDS: the count follows the note's distinct atomic CONCEPTS, never its length. First identify the key concepts worth remembering, then make roughly one recall card per concept plus a synthesis card only where transfer genuinely matters. Every card is a recurring review obligation, so be selective: skip trivia and restating, and do NOT pad to reach a number. Fewer high-value cards beat exhaustive coverage. A short dense note may warrant many cards; a long shallow one, few.
+
 RECALL kinds test material EXPLICIT in the note, graded deterministically. Subtypes:
 - cued: a fact/definition directly ("What is {concept}?"). Default for atomic facts; reach for a sharper subtype when one fits.
 - reverse: recognize a concept from its description ("Which concept is described by: '{definition}'?").
@@ -212,8 +233,25 @@ SYNTHESIS kinds connect the note to scenarios, other notes, or the real world. O
 
 CONTRACT (cards violating it are dropped): a subtype must match its kind; recall cards have a concrete back and NO rubric; every synthesis card MUST carry a valid rubric (>=1 criterion with non-empty description + positive weight, plus a non-empty modelAnswer). Favor a SPREAD of subtypes over a pile of cued cards — variety is a desirable difficulty. Aim for a balance of recall and synthesis cards.`
 
-function buildUserPrompt(notePath: string, body: string): string {
-  return `Generate flashcards from the note below (vault path: ${notePath}).\n\n--- NOTE START ---\n${body}\n--- NOTE END ---\n\nReturn the JSON array now.`
+function buildUserPrompt(
+  notePath: string,
+  body: string,
+  density: FlashcardDensity,
+  existing: string[]
+): string {
+  const directives = [
+    DENSITY_GUIDANCE[density] ?? DENSITY_GUIDANCE[DEFAULT_FLASHCARD_DENSITY],
+    `Produce AT MOST ${FLASHCARD_MAX_PER_RUN} cards this run.`
+  ]
+  if (existing.length > 0) {
+    const list = existing.slice(0, 60).map((s) => `- ${s}`).join('\n')
+    directives.push(
+      `These cards/concepts already exist for this note — do NOT repeat them; produce different, complementary cards (return an empty array if nothing worthwhile remains):\n${list}`
+    )
+  }
+  return `Generate study cards from the note below (vault path: ${notePath}).\n\n${directives.join(
+    '\n'
+  )}\n\n--- NOTE START ---\n${body}\n--- NOTE END ---\n\nReturn the JSON array now.`
 }
 
 /** Extract the JSON array from a model response, tolerating stray prose/fences. */
@@ -246,20 +284,22 @@ export interface GenerateFlashcardsResult {
 export async function generateFlashcards(
   root: string,
   notePath: string,
-  opts: { model?: string } = {}
+  opts: { model?: string; density?: FlashcardDensity; existing?: string[] } = {}
 ): Promise<GenerateFlashcardsResult> {
   const apiKey = await getAnthropicApiKey()
   if (!apiKey) throw new MissingAnthropicKeyError()
 
   const body = await fs.readFile(absolutePath(root, notePath), 'utf8')
   const model = opts.model?.trim() || DEFAULT_FLASHCARD_MODEL
+  const density = opts.density ?? DEFAULT_FLASHCARD_DENSITY
+  const existing = (opts.existing ?? []).filter((s) => typeof s === 'string' && s.trim())
 
   const client = new Anthropic({ apiKey })
   const response = await client.messages.create({
     model,
     max_tokens: 16000,
     system: FLASHCARD_SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: buildUserPrompt(notePath, body) }]
+    messages: [{ role: 'user', content: buildUserPrompt(notePath, body, density, existing) }]
   })
 
   const text = response.content
@@ -274,6 +314,10 @@ export async function generateFlashcards(
     const draft = normalizeDraft(raw, randomUUID)
     if (draft) drafts.push(draft)
     else dropped++
+  }
+  // Defensive cap — the prompt asks for at most N, but enforce it regardless.
+  if (drafts.length > FLASHCARD_MAX_PER_RUN) {
+    drafts.length = FLASHCARD_MAX_PER_RUN
   }
   return { drafts, dropped }
 }

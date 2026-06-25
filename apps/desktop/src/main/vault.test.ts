@@ -72,21 +72,34 @@ describe('rootContentHiddenByInboxMode (#195)', () => {
 })
 
 describe('vault settings flashcard model round-trip', () => {
-  it('persists a chosen flashcardModel through set + get', async () => {
+  it('persists a chosen flashcardModel + flashcardDensity through set + get', async () => {
     const root = await makeTempDir('zennotes-vault-flashcard-')
     await mkdir(root, { recursive: true })
     const base = await getVaultSettings(root)
-    const saved = await setVaultSettings(root, { ...base, flashcardModel: 'claude-haiku-4-5' })
+    const saved = await setVaultSettings(root, {
+      ...base,
+      flashcardModel: 'claude-haiku-4-5',
+      flashcardDensity: 'thorough'
+    })
     expect(saved.flashcardModel).toBe('claude-haiku-4-5')
+    expect(saved.flashcardDensity).toBe('thorough')
     const reread = await getVaultSettings(root)
     expect(reread.flashcardModel).toBe('claude-haiku-4-5')
+    expect(reread.flashcardDensity).toBe('thorough')
   })
 
-  it('defaults flashcardModel when unset', async () => {
+  it('defaults flashcardModel + flashcardDensity when unset/invalid', async () => {
     const root = await makeTempDir('zennotes-vault-flashcard-default-')
     await mkdir(root, { recursive: true })
     const settings = await getVaultSettings(root)
     expect(settings.flashcardModel).toBe('claude-sonnet-4-6')
+    expect(settings.flashcardDensity).toBe('balanced')
+    // An invalid density falls back to the default.
+    const saved = await setVaultSettings(root, {
+      ...settings,
+      flashcardDensity: 'bogus' as never
+    })
+    expect(saved.flashcardDensity).toBe('balanced')
   })
 })
 

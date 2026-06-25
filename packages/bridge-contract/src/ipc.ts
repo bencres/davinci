@@ -331,9 +331,20 @@ export interface VaultSettings {
   favorites: string[]
   /** Anthropic model used for flashcard generation (default `claude-sonnet-4-6`). */
   flashcardModel?: string
+  /** How many cards to aim for per note — drives the generation prompt. */
+  flashcardDensity?: FlashcardDensity
 }
 
 export const DEFAULT_FLASHCARD_MODEL = 'claude-sonnet-4-6'
+
+/**
+ * Card-density preference for generation. `concise` tests only the most
+ * essential concepts; `thorough` covers every distinct concept. The "right"
+ * number is driven by the note's atomic concepts, not its length — this just
+ * shifts the selectivity threshold.
+ */
+export type FlashcardDensity = 'concise' | 'balanced' | 'thorough'
+export const DEFAULT_FLASHCARD_DENSITY: FlashcardDensity = 'balanced'
 
 export const DEFAULT_DAILY_NOTES_DIRECTORY = 'Daily Notes'
 export const DEFAULT_DAILY_NOTE_TITLE_PATTERN = 'yyyy-MM-dd'
@@ -361,7 +372,8 @@ export const DEFAULT_VAULT_SETTINGS: VaultSettings = {
   folderIcons: {},
   folderColors: {},
   favorites: [],
-  flashcardModel: DEFAULT_FLASHCARD_MODEL
+  flashcardModel: DEFAULT_FLASHCARD_MODEL,
+  flashcardDensity: DEFAULT_FLASHCARD_DENSITY
 }
 
 export interface NoteMeta {

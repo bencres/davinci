@@ -24,6 +24,7 @@ import type {
   ServerCapabilities,
   ServerSessionStatus,
   VaultSettings,
+  FlashcardDensity,
   TikzRenderResponse,
   VaultChangeEvent,
   VaultDemoTourResult,
@@ -68,6 +69,14 @@ export interface ZenCapabilities {
 export interface GenerateOptions {
   /** Model id; defaults to the vault's configured model (`claude-sonnet-4-6`). */
   model?: string
+  /** Card-density preference; defaults to the vault's configured density. */
+  density?: FlashcardDensity
+  /**
+   * Cards already created for this note (fronts + focus concepts). The model is
+   * told to produce different, complementary cards — used by "Generate more" and
+   * to avoid re-creating already-saved cards.
+   */
+  existing?: string[]
 }
 
 /** Result of a flashcard-generation request: validated drafts + drop count. */

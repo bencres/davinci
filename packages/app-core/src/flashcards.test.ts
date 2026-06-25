@@ -75,17 +75,41 @@ beforeEach(() => {
 })
 
 describe('flashcards store slice', () => {
-  it('generation populates the review batch and dropped count', async () => {
+  it('generation populates the review batch and passes model + density', async () => {
     const { useStore } = await loadStore()
-    useStore.setState({ flashcardReviewNote: NOTE })
+    useStore.setState({
+      flashcardReviewNote: NOTE,
+      vaultSettings: { ...useStore.getState().vaultSettings, flashcardDensity: 'thorough' }
+    })
     await useStore.getState().generateFlashcardsForActiveNote()
 
     const s = useStore.getState()
-    expect(generateMock).toHaveBeenCalledWith(NOTE, expect.objectContaining({ model: expect.any(String) }))
+    expect(generateMock).toHaveBeenCalledWith(
+      NOTE,
+      expect.objectContaining({ model: expect.any(String), density: 'thorough' })
+    )
     expect(s.flashcardGenStatus).toBe('reviewing')
     expect(s.flashcardDraftCards).toHaveLength(2)
     expect(s.flashcardDraftKept).toEqual([true, true])
     expect(s.flashcardDropped).toBe(1)
+  })
+
+  it('generateMoreFlashcards appends and excludes existing fronts/concepts', async () => {
+    const { useStore } = await loadStore()
+    useStore.setState({ flashcardReviewNote: NOTE })
+    await useStore.getState().generateFlashcardsForActiveNote()
+    expect(useStore.getState().flashcardDraftCards).toHaveLength(2)
+
+    await useStore.getState().generateMoreFlashcards()
+
+    const s = useStore.getState()
+    // The second batch (mock returns the same 2) is appended → 4 total.
+    expect(s.flashcardDraftCards).toHaveLength(4)
+    expect(s.flashcardDraftKept).toHaveLength(4)
+    expect(s.flashcardGenMoreLoading).toBe(false)
+    // The "more" call was told to avoid the already-present cards.
+    const lastCall = generateMock.mock.calls.at(-1)?.[1] as { existing?: string[] }
+    expect(lastCall.existing).toContain('What is X?')
   })
 
   it('updateDraftCard patches the card and marks it user-edited', async () => {

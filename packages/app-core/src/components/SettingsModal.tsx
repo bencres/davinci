@@ -7,7 +7,8 @@ import {
   DEFAULT_WEEKLY_NOTE_LOCALE,
   DEFAULT_WEEKLY_NOTE_TITLE_PATTERN,
   DEFAULT_WEEKLY_NOTES_DIRECTORY,
-  DEFAULT_FLASHCARD_MODEL
+  DEFAULT_FLASHCARD_MODEL,
+  DEFAULT_FLASHCARD_DENSITY
 } from '@shared/ipc'
 import type {
   AppUpdateState,
@@ -1481,6 +1482,12 @@ export function SettingsModal(): JSX.Element {
           title: 'Study model',
           description: 'Which Claude model generates your study cards.',
           keywords: ['model', 'sonnet', 'opus', 'haiku', 'claude', 'study']
+        },
+        {
+          id: 'flashcard-density',
+          title: 'Card density',
+          description: 'How many cards to aim for per note.',
+          keywords: ['density', 'count', 'how many', 'concise', 'thorough', 'study']
         }
       ],
       content: (
@@ -1558,6 +1565,26 @@ export function SettingsModal(): JSX.Element {
               ]}
               onChange={(flashcardModel) =>
                 void persistVaultSettings({ ...vaultSettings, flashcardModel })
+              }
+            />
+          </Section>
+
+          <Section
+            title="Card density"
+            description="How many cards to aim for per note. The count follows the note's key concepts, not its length — this shifts how selective generation is."
+          >
+            <SegmentedRow
+              label="Cards per note"
+              description="Concise tests only the essentials; Thorough covers every distinct concept. A per-run cap still applies — use “Generate more” for additional cards."
+              value={vaultSettings.flashcardDensity ?? DEFAULT_FLASHCARD_DENSITY}
+              settingId="flashcard-density"
+              options={[
+                { value: 'concise', label: 'Concise' },
+                { value: 'balanced', label: 'Balanced' },
+                { value: 'thorough', label: 'Thorough' }
+              ]}
+              onChange={(flashcardDensity) =>
+                void persistVaultSettings({ ...vaultSettings, flashcardDensity })
               }
             />
           </Section>

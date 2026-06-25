@@ -58,6 +58,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
   const status = useStore((s) => s.flashcardGenStatus)
   const error = useStore((s) => s.flashcardGenError)
   const dropped = useStore((s) => s.flashcardDropped)
+  const genMoreLoading = useStore((s) => s.flashcardGenMoreLoading)
   const deckByNote = useStore((s) => s.flashcardDeckByNote)
   const keymapOverrides = useStore((s) => s.keymapOverrides)
   const vimMode = useStore((s) => s.vimMode)
@@ -66,6 +67,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
   const toggleDraftCardKept = useStore((s) => s.toggleDraftCardKept)
   const saveReviewedFlashcards = useStore((s) => s.saveReviewedFlashcards)
   const generateForActive = useStore((s) => s.generateFlashcardsForActiveNote)
+  const generateMore = useStore((s) => s.generateMoreFlashcards)
   const setFocusedPanel = useStore((s) => s.setFocusedPanel)
   const closeActiveNote = useStore((s) => s.closeActiveNote)
   const setSettingsOpen = useStore((s) => s.setSettingsOpen)
@@ -283,14 +285,31 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                 Review, edit, and keep the cards you want. {dropped > 0 && (
                   <span className="text-ink-500">{dropped} card{dropped === 1 ? '' : 's'} dropped as invalid.</span>
                 )}
+                {error && <span className="text-[rgb(var(--z-red))]"> {error}</span>}
               </div>
-              <button
-                type="button"
-                onClick={() => void generateForActive()}
-                className="shrink-0 rounded-lg border border-paper-300/70 bg-paper-100/80 px-3 py-1.5 text-xs font-medium text-ink-800 hover:bg-paper-200"
-              >
-                Regenerate
-              </button>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void generateMore()}
+                  disabled={genMoreLoading}
+                  className={[
+                    'rounded-lg border border-paper-300/70 px-3 py-1.5 text-xs font-medium transition-colors',
+                    genMoreLoading
+                      ? 'cursor-default bg-paper-100/50 text-ink-400'
+                      : 'bg-paper-100/80 text-ink-800 hover:bg-paper-200'
+                  ].join(' ')}
+                >
+                  {genMoreLoading ? 'Generating…' : 'Generate more'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void generateForActive()}
+                  disabled={genMoreLoading}
+                  className="rounded-lg border border-paper-300/70 bg-paper-100/80 px-3 py-1.5 text-xs font-medium text-ink-800 hover:bg-paper-200 disabled:cursor-default disabled:text-ink-400"
+                >
+                  Regenerate
+                </button>
+              </div>
             </div>
 
             <div className="flex flex-col gap-3">

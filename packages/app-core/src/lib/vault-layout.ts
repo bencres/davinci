@@ -7,6 +7,8 @@ import {
   DEFAULT_WEEKLY_NOTES_DIRECTORY,
   DEFAULT_VAULT_SETTINGS,
   DEFAULT_FLASHCARD_MODEL,
+  DEFAULT_FLASHCARD_DENSITY,
+  type FlashcardDensity,
   type AssetMeta,
   type DateNotePatternSettings,
   type FolderIconId,
@@ -534,8 +536,16 @@ export function normalizeVaultSettings(
     flashcardModel:
       typeof settings?.flashcardModel === 'string' && settings.flashcardModel.trim()
         ? settings.flashcardModel.trim()
-        : DEFAULT_FLASHCARD_MODEL
+        : DEFAULT_FLASHCARD_MODEL,
+    flashcardDensity: normalizeFlashcardDensity(settings?.flashcardDensity)
   }
+}
+
+const FLASHCARD_DENSITIES: readonly FlashcardDensity[] = ['concise', 'balanced', 'thorough']
+function normalizeFlashcardDensity(value: unknown): FlashcardDensity {
+  return (FLASHCARD_DENSITIES as readonly string[]).includes(value as string)
+    ? (value as FlashcardDensity)
+    : DEFAULT_FLASHCARD_DENSITY
 }
 
 export function folderIconKey(folder: NoteFolder, subpath: string): string {

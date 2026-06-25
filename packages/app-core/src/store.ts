@@ -1799,6 +1799,8 @@ interface Store {
   flashcardGenError: string | null
   /** How many cards Claude returned that failed normalization in the last run. */
   flashcardDropped: number
+  /** True while a "Generate more" run is appending to the current review batch. */
+  flashcardGenMoreLoading: boolean
 
   /** Tags currently selected in the Tags view. The view shows every non-
    *  trash note carrying *all* (or, in `any` mode, any) of these, depending on
@@ -1891,6 +1893,8 @@ interface Store {
   openFlashcardReview: (notePath: string) => Promise<void>
   /** Run Claude generation for the review note; sets status/draft state. */
   generateFlashcardsForActiveNote: () => Promise<void>
+  /** Run another capped generation and APPEND distinct cards to the review batch. */
+  generateMoreFlashcards: () => Promise<void>
   /** Patch a draft card in place (marks the run as user-edited). */
   updateDraftCard: (index: number, patch: Partial<FlashcardDraft>) => void
   /** Toggle a draft card's keep/discard state. */
@@ -2547,6 +2551,25 @@ function withDateNotePatternHistory(
   }
 }
 
+/** Fronts + focus concepts already covered, to tell the generator what to avoid. */
+function cardIdentifiers(cards: { front: string; concepts: string[] }[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const c of cards) {
+    const front = c.front?.trim()
+    if (front && !seen.has(`f:${front}`)) {
+      seen.add(`f:${front}`)
+      out.push(front)
+    }
+    const focus = c.concepts?.[0]?.trim()
+    if (focus && !seen.has(`c:${focus}`)) {
+      seen.add(`c:${focus}`)
+      out.push(focus)
+    }
+  }
+  return out
+}
+
 function rewriteNoteCommentsPath(
   comments: Record<string, NoteComment[]>,
   oldPath: string,
@@ -3164,6 +3187,7 @@ export const useStore = create<Store>((set, get) => {
   flashcardGenStatus: 'idle',
   flashcardGenError: null,
   flashcardDropped: 0,
+  flashcardGenMoreLoading: false,
   selectedTags: [],
   tagMatchMode: 'all',
   focusedPanel: null,
@@ -3576,8 +3600,12 @@ export const useStore = create<Store>((set, get) => {
     if (get().flashcardGenStatus === 'generating') return
     set({ flashcardGenStatus: 'generating', flashcardGenError: null, flashcardDropped: 0 })
     try {
-      const model = get().vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
-      const result = await window.zen.generateFlashcards(notePath, { model })
+      const s = get()
+      const model = s.vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
+      const density = s.vaultSettings.flashcardDensity
+      // Avoid re-creating cards already saved for this note.
+      const existing = cardIdentifiers(s.flashcardDeckByNote[notePath]?.cards ?? [])
+      const result = await window.zen.generateFlashcards(notePath, { model, density, existing })
       set({
         flashcardDraftCards: result.drafts,
         flashcardDraftKept: result.drafts.map(() => true),
@@ -3593,6 +3621,39 @@ export const useStore = create<Store>((set, get) => {
         ? 'No Anthropic API key is set. Add one in Settings to generate flashcards.'
         : raw || 'Flashcard generation failed.'
       set({ flashcardGenStatus: 'error', flashcardGenError: friendly })
+    }
+  },
+
+  generateMoreFlashcards: async () => {
+    const notePath = get().flashcardReviewNote
+    if (!notePath) return
+    if (get().flashcardGenStatus !== 'reviewing' || get().flashcardGenMoreLoading) return
+    set({ flashcardGenMoreLoading: true, flashcardGenError: null })
+    try {
+      const s = get()
+      const model = s.vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
+      const density = s.vaultSettings.flashcardDensity
+      // Exclude everything already on screen plus the saved deck.
+      const existing = cardIdentifiers([
+        ...s.flashcardDraftCards,
+        ...(s.flashcardDeckByNote[notePath]?.cards ?? [])
+      ])
+      const result = await window.zen.generateFlashcards(notePath, { model, density, existing })
+      set((prev) => ({
+        flashcardDraftCards: [...prev.flashcardDraftCards, ...result.drafts],
+        flashcardDraftKept: [...prev.flashcardDraftKept, ...result.drafts.map(() => true)],
+        flashcardDraftEdited: [...prev.flashcardDraftEdited, ...result.drafts.map(() => false)],
+        flashcardGenMoreLoading: false
+      }))
+    } catch (err) {
+      // Keep the existing batch on screen; surface a brief inline message.
+      const raw = err instanceof Error ? err.message : String(err)
+      set({
+        flashcardGenMoreLoading: false,
+        flashcardGenError: raw.includes('NO_ANTHROPIC_KEY')
+          ? 'No Anthropic API key is set. Add one in Settings.'
+          : 'Could not generate more cards. Try again.'
+      })
     }
   },
 
