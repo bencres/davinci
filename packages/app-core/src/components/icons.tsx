@@ -337,6 +337,14 @@ export const CheckSquareIcon = (p: IconProps): JSX.Element => (
   </I>
 )
 
+export const InfoIcon = (p: IconProps): JSX.Element => (
+  <I {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 16v-4" />
+    <path d="M12 8h.01" />
+  </I>
+)
+
 export const DocumentIcon = (p: IconProps): JSX.Element => (
   <I {...p}>
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />

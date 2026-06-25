@@ -5,8 +5,11 @@ import {
   findSourceQuoteOffset,
   notePathFromFlashcardsTab,
   flashcardsTitleFromTab,
+  KIND_INFO,
   RECALL_SUBTYPES,
+  RECALL_SUBTYPE_INFO,
   SYNTHESIS_SUBTYPES,
+  SYNTHESIS_SUBTYPE_INFO,
   type FlashcardDraft,
   type FlashcardKind,
   type RecallSubtype,
@@ -16,7 +19,7 @@ import {
 } from '@shared/flashcards'
 import { matchesSequenceToken, matchesShortcut } from '../lib/keymaps'
 import { isAppOverlayOpen } from '../lib/overlay-open'
-import { ArrowUpRightIcon } from './icons'
+import { ArrowUpRightIcon, InfoIcon } from './icons'
 
 const CARD_MIX_OPTIONS = [
   { value: 'balanced', label: 'Balanced' },
@@ -506,7 +509,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                     {editing ? (
                       <div className="mt-3 flex flex-col gap-3 text-sm">
                         <div className="grid grid-cols-3 gap-3">
-                          <Field label="Kind">
+                          <Field label="Kind" info={<KindInfo />}>
                             <select
                               value={draft.kind}
                               onChange={(e) => changeKind(index, e.target.value as FlashcardKind)}
@@ -516,7 +519,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                               <option value="synthesis">synthesis</option>
                             </select>
                           </Field>
-                          <Field label="Subtype">
+                          <Field label="Subtype" info={<SubtypeInfo kind={draft.kind} />}>
                             <select
                               value={draft.subtype}
                               onChange={(e) =>
@@ -545,7 +548,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                               }
                               className={inputClass}
                             >
-                              {[1, 2, 3, 4, 5].map((d) => (
+                              {[1, 2, 3, 4].map((d) => (
                                 <option key={d} value={d}>
                                   {difficultyLabel(d)}
                                 </option>
@@ -571,20 +574,16 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                         </Field>
                         <div className="grid grid-cols-2 gap-3">
                           <Field label="Concepts (≤3, comma-separated)">
-                            <input
-                              value={labelList(draft.concepts)}
-                              onChange={(e) =>
-                                updateDraftCard(index, { concepts: parseLabels(e.target.value) })
-                              }
+                            <LabelInput
+                              value={draft.concepts}
+                              onChange={(concepts) => updateDraftCard(index, { concepts })}
                               className={inputClass}
                             />
                           </Field>
                           <Field label="Prerequisites (≤3, comma-separated)">
-                            <input
-                              value={labelList(draft.prerequisites)}
-                              onChange={(e) =>
-                                updateDraftCard(index, { prerequisites: parseLabels(e.target.value) })
-                              }
+                            <LabelInput
+                              value={draft.prerequisites}
+                              onChange={(prerequisites) => updateDraftCard(index, { prerequisites })}
                               className={inputClass}
                             />
                           </Field>
@@ -798,12 +797,111 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
 const inputClass =
   'w-full rounded-lg border border-paper-300/70 bg-paper-50/80 px-2.5 py-1.5 text-sm text-ink-900 outline-none focus:border-accent/45'
 
-function Field({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
+function Field({
+  label,
+  info,
+  children
+}: {
+  label: string
+  info?: React.ReactNode
+  children: React.ReactNode
+}): JSX.Element {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-2xs uppercase tracking-[0.14em] text-ink-500">{label}</span>
+      <span className="flex items-center gap-1 text-2xs uppercase tracking-[0.14em] text-ink-500">
+        {label}
+        {info != null && <InfoHint>{info}</InfoHint>}
+      </span>
       {children}
     </label>
+  )
+}
+
+/**
+ * Comma-separated label editor that keeps its own raw text buffer so spaces and
+ * trailing commas survive while typing (the store still receives a normalized
+ * 1–3 array via `parseLabels`). Re-syncs from props only when the external value
+ * genuinely diverges from what the buffer represents (card switch / external edit).
+ */
+function LabelInput({
+  value,
+  onChange,
+  className
+}: {
+  value: string[]
+  onChange: (next: string[]) => void
+  className?: string
+}): JSX.Element {
+  const [text, setText] = useState(() => value.join(', '))
+  useEffect(() => {
+    if (parseLabels(text).join(' ') !== value.join(' ')) {
+      setText(value.join(', '))
+    }
+    // Intentionally only react to external `value` changes, not local keystrokes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
+  return (
+    <input
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value)
+        onChange(parseLabels(e.target.value))
+      }}
+      className={className}
+    />
+  )
+}
+
+/** A small ⓘ affordance that reveals explanatory copy on hover/focus. */
+function InfoHint({ children }: { children: React.ReactNode }): JSX.Element {
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        aria-label="What is this?"
+        onClick={(e) => e.preventDefault()}
+        className="text-ink-400 transition-colors hover:text-accent focus:text-accent focus:outline-none"
+      >
+        <InfoIcon width={13} height={13} />
+      </button>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden w-72 rounded-lg border border-paper-300/70 bg-paper-50 px-3 py-2 text-2xs font-normal normal-case leading-relaxed tracking-normal text-ink-700 shadow-lg group-hover:block group-focus-within:block"
+      >
+        {children}
+      </span>
+    </span>
+  )
+}
+
+/** Popover body explaining the two card kinds. */
+function KindInfo(): JSX.Element {
+  return (
+    <span className="flex flex-col gap-1">
+      <span>
+        <b className="font-semibold">recall</b> — {KIND_INFO.recall}
+      </span>
+      <span>
+        <b className="font-semibold">synthesis</b> — {KIND_INFO.synthesis}
+      </span>
+    </span>
+  )
+}
+
+/** Popover body listing each subtype valid for the current kind. */
+function SubtypeInfo({ kind }: { kind: FlashcardKind }): JSX.Element {
+  const entries: [string, string][] =
+    kind === 'recall'
+      ? RECALL_SUBTYPES.map((st) => [st, RECALL_SUBTYPE_INFO[st]])
+      : SYNTHESIS_SUBTYPES.map((st) => [st, SYNTHESIS_SUBTYPE_INFO[st]])
+  return (
+    <span className="flex flex-col gap-1">
+      {entries.map(([st, desc]) => (
+        <span key={st}>
+          <b className="font-semibold">{st}</b> — {desc}
+        </span>
+      ))}
+    </span>
   )
 }
 
