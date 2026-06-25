@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useStore } from '../store'
-import { localDateKey, type ConceptMastery, type HeatmapDay } from '@shared/study-stats'
+import {
+  localDateKey,
+  type CalibrationStats,
+  type ConceptMastery,
+  type HeatmapDay
+} from '@shared/study-stats'
+import type { ConceptGap, GapReason } from '@shared/concept-graph'
 import { TargetIcon, ZapIcon } from './icons'
 
 interface Props {
@@ -156,6 +162,101 @@ function ConceptRow({ concept }: { concept: ConceptMastery }): JSX.Element {
   )
 }
 
+/** A signed bias bar centered at zero: under-confident (left) ↔ over-confident (right). */
+function BiasBar({ bias }: { bias: number }): JSX.Element {
+  const clamped = Math.max(-2, Math.min(2, bias)) // ratings span 1–4, so |bias| ≤ 3; clamp for display
+  const half = (Math.abs(clamped) / 2) * 50 // 0..50% of the track width
+  const over = clamped > 0
+  return (
+    <div className="relative h-2 w-full rounded-full bg-paper-300">
+      {/* center tick */}
+      <div className="absolute left-1/2 top-[-2px] h-3 w-px -translate-x-1/2 bg-ink-400" />
+      {Math.abs(clamped) > 0.01 && (
+        <div
+          className={`absolute top-0 h-full ${over ? 'rounded-r-full bg-amber-500' : 'rounded-l-full bg-sky-500'}`}
+          style={over ? { left: '50%', width: `${half}%` } : { right: '50%', width: `${half}%` }}
+        />
+      )}
+    </div>
+  )
+}
+
+/** Predicted-vs-actual calibration: how well self-predictions matched real grades. */
+function CalibrationCard({ c }: { c: CalibrationStats }): JSX.Element {
+  const bias = c.signedBias
+  const abs = Math.abs(bias)
+  const verdict = abs < 0.25 ? 'Well calibrated' : bias > 0 ? 'Over-confident' : 'Under-confident'
+  const tone = abs < 0.25 ? 'text-emerald-700' : bias > 0 ? 'text-amber-700' : 'text-sky-700'
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="text-sm font-semibold text-ink-800">Calibration</h2>
+      <div className="flex flex-col gap-3 rounded-xl border border-paper-300 bg-paper-50 px-4 py-3">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className={`text-sm font-semibold ${tone}`}>{verdict}</span>
+          <span className="text-2xs text-ink-500">
+            avg error {c.meanAbsError.toFixed(2)} / 3 · {c.sampleSize} reviews
+          </span>
+        </div>
+        <BiasBar bias={bias} />
+        <div className="flex items-center justify-between text-2xs text-ink-500">
+          <span>under-confident</span>
+          <span>over-confident</span>
+        </div>
+        {c.recent.sampleSize > 0 && c.recent.sampleSize < c.sampleSize && (
+          <p className="text-2xs text-ink-500">
+            Recent {c.recent.sampleSize}: error {c.recent.meanAbsError.toFixed(2)}, bias{' '}
+            {c.recent.signedBias >= 0 ? '+' : ''}
+            {c.recent.signedBias.toFixed(2)}
+          </p>
+        )}
+      </div>
+    </section>
+  )
+}
+
+const GAP_LABEL: Record<GapReason, string> = {
+  'unmet-prereq': 'weak foundation',
+  'orphan-prereq': 'no cards yet',
+  weak: 'needs review'
+}
+
+/** "Shore up" list: weakest / unmet-prerequisite concepts, click to study. */
+function GapsSection({ gaps }: { gaps: ConceptGap[] }): JSX.Element {
+  const startStudySession = useStore((s) => s.startStudySession)
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="text-sm font-semibold text-ink-800">Shore up these gaps</h2>
+      <div className="flex flex-col gap-2">
+        {gaps.slice(0, 8).map((g) => {
+          // Untaught prerequisites have no cards to study yet.
+          const studyable = g.reason !== 'orphan-prereq'
+          return (
+            <button
+              key={g.key}
+              type="button"
+              disabled={!studyable}
+              onClick={() => studyable && void startStudySession({ kind: 'concept', concept: g.concept })}
+              className={[
+                'flex items-center justify-between gap-2 rounded-lg border border-paper-300 bg-paper-50 px-3 py-2 text-left',
+                studyable ? 'hover:border-amber-400/60 hover:bg-amber-500/5' : 'cursor-default opacity-80'
+              ].join(' ')}
+              title={studyable ? `Study “${g.concept}”` : `“${g.concept}” has no cards yet`}
+            >
+              <span className="truncate text-sm font-medium text-ink-800">{g.concept}</span>
+              <span className="flex shrink-0 items-center gap-2 text-2xs text-ink-500">
+                {g.reason !== 'orphan-prereq' && <span>{g.masteryPct}% mastery</span>}
+                <span className="rounded-full bg-amber-500/12 px-2 py-0.5 font-medium text-amber-700">
+                  {GAP_LABEL[g.reason]}
+                </span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
 /** The gamified study hub: streak, goal ring, activity heatmap, concept mastery. */
 export function StudyDashboard({ isActive }: Props): JSX.Element {
   const stats = useStore((s) => s.studyStats)
@@ -164,11 +265,16 @@ export function StudyDashboard({ isActive }: Props): JSX.Element {
   const loadStudyStats = useStore((s) => s.loadStudyStats)
   const setStudyDailyGoal = useStore((s) => s.setStudyDailyGoal)
   const startStudySession = useStore((s) => s.startStudySession)
+  const conceptGraph = useStore((s) => s.conceptGraph)
+  const loadConceptGraph = useStore((s) => s.loadConceptGraph)
 
   // Refresh whenever this tab becomes the active one (cheap; reads deck/log files).
   useEffect(() => {
-    if (isActive) void loadStudyStats()
-  }, [isActive, loadStudyStats])
+    if (isActive) {
+      void loadStudyStats()
+      void loadConceptGraph() // powers the "shore up" gaps list
+    }
+  }, [isActive, loadStudyStats, loadConceptGraph])
 
   const [editingGoal, setEditingGoal] = useState(false)
   const [goalDraft, setGoalDraft] = useState('')
@@ -293,6 +399,12 @@ export function StudyDashboard({ isActive }: Props): JSX.Element {
         </div>
         <Heatmap days={stats.heatmap} />
       </section>
+
+      {/* ---- Calibration (predicted vs. actual) ---- */}
+      {stats.calibration.sampleSize > 0 && <CalibrationCard c={stats.calibration} />}
+
+      {/* ---- Gaps to shore up ---- */}
+      {conceptGraph && conceptGraph.gaps.length > 0 && <GapsSection gaps={conceptGraph.gaps} />}
 
       {/* ---- Per-concept mastery ---- */}
       <section className="flex flex-col gap-2">

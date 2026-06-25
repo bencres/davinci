@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import {
   isArchiveViewActive,
   isAssetsViewActive,
+  isConceptGraphActive,
   isHelpViewActive,
   isQuickNotesViewActive,
   isStudyDashboardActive,
@@ -34,6 +35,7 @@ import {
   FolderPlusIcon,
   NotePlusIcon,
   PanelLeftIcon,
+  GraphIcon,
   PlusIcon,
   SearchIcon,
   SettingsIcon,
@@ -399,6 +401,8 @@ export function Sidebar(): JSX.Element {
   const tasksViewActive = useStore(isTasksViewActive);
   const openStudyDashboard = useStore((s) => s.openStudyDashboard);
   const studyDashboardActive = useStore(isStudyDashboardActive);
+  const openConceptGraph = useStore((s) => s.openConceptGraph);
+  const conceptGraphActive = useStore(isConceptGraphActive);
   const openQuickNotesView = useStore((s) => s.openQuickNotesView);
   const quickNotesViewActive = useStore(isQuickNotesViewActive);
   const openHelpView = useStore((s) => s.openHelpView);
@@ -3021,6 +3025,17 @@ export function Sidebar(): JSX.Element {
             label="Study"
             sidebarType="study"
             icon={<TargetIcon width={12} height={12} strokeWidth={2.15} />}
+            sidebarIdx={idxCounter.current.value++}
+            vimHighlight={vimCursor === idxCounter.current.value - 1}
+            sidebarFocused={isSidebarFocused}
+          />
+
+          <TaskSidebarRow
+            active={conceptGraphActive}
+            onClick={() => void openConceptGraph()}
+            label="Concept graph"
+            sidebarType="concept-graph"
+            icon={<GraphIcon width={12} height={12} strokeWidth={2.15} />}
             sidebarIdx={idxCounter.current.value++}
             vimHighlight={vimCursor === idxCounter.current.value - 1}
             sidebarFocused={isSidebarFocused}

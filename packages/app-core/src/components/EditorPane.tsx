@@ -102,6 +102,7 @@ import { DatabaseView } from './DatabaseView'
 import { FlashcardReviewView } from './FlashcardReviewView'
 import { StudyView } from './StudyView'
 import { StudyDashboard } from './StudyDashboard'
+import { ConceptGraphView } from './ConceptGraphView'
 import { LazyExcalidrawView } from './LazyExcalidrawView'
 import { isExcalidrawPath } from '@shared/excalidraw'
 import { TagView } from './TagView'
@@ -117,6 +118,7 @@ import {
   flashcardsTitleFromTab,
   isStudyTabPath,
   isStudyDashboardTabPath,
+  isConceptGraphTabPath,
   studyTitleFromTab
 } from '@shared/flashcards'
 import { isTagsTabPath } from '@shared/tags'
@@ -2381,6 +2383,13 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             isStudy: true
           }
         }
+        if (isConceptGraphTabPath(path)) {
+          return {
+            ...base,
+            title: 'Concept graph',
+            isStudy: true
+          }
+        }
         if (isStudyTabPath(path)) {
           return {
             ...base,
@@ -2467,7 +2476,8 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
       isDatabaseTabPath(path) ||
       isFlashcardsTabPath(path) ||
       isStudyTabPath(path) ||
-      isStudyDashboardTabPath(path)
+      isStudyDashboardTabPath(path) ||
+      isConceptGraphTabPath(path)
     ) {
       return [
         { label: 'Close', onSelect: async () => closeTabInPane(paneId, path) },
@@ -3284,6 +3294,8 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             <StudyView tabPath={activeTab} isActive={isActive} />
           ) : isStudyDashboardTabPath(activeTab) ? (
             <StudyDashboard isActive={isActive} />
+          ) : isConceptGraphTabPath(activeTab) ? (
+            <ConceptGraphView isActive={isActive} />
           ) : activeTab && isExcalidrawPath(activeTab) ? (
             <LazyExcalidrawView path={activeTab} />
           ) : content ? (

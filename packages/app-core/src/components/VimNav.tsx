@@ -208,6 +208,11 @@ export function VimNav(): JSX.Element | null {
           detail: "Open the note's saved cards to edit, delete, or add more."
         },
         {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyCrossNote'),
+          label: 'Cross-note synthesis',
+          detail: "Generate cards connecting this note to its wiki-linked notes."
+        },
+        {
           keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyReview'),
           label: 'Review due cards',
           detail: 'Start a spaced-repetition session over all due cards in the vault.'
@@ -216,6 +221,16 @@ export function VimNav(): JSX.Element | null {
           keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyReviewNote'),
           label: "Review this note's deck",
           detail: "Study just the active note's due cards."
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyDashboard'),
+          label: 'Open dashboard',
+          detail: 'Open the gamified study dashboard (streak, goal, mastery).'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyGraph'),
+          label: 'Concept graph',
+          detail: 'Open the concept (knowledge) graph: prerequisites, mastery, and gaps.'
         }
       ]
     }
@@ -825,7 +840,7 @@ export function VimNav(): JSX.Element | null {
 
       if (leaderPending.current === 'leader-g') {
         const active = state.activeNote
-        const openStudy = (mode: 'quick' | 'custom' | 'manual' | 'edit'): void => {
+        const openStudy = (mode: 'quick' | 'custom' | 'manual' | 'edit' | 'cross'): void => {
           e.preventDefault()
           e.stopImmediatePropagation()
           resetLeader()
@@ -835,6 +850,7 @@ export function VimNav(): JSX.Element | null {
         if (matchesSequenceToken(e, overrides, 'vim.leaderStudyCustom')) return openStudy('custom')
         if (matchesSequenceToken(e, overrides, 'vim.leaderStudyManual')) return openStudy('manual')
         if (matchesSequenceToken(e, overrides, 'vim.leaderStudyEdit')) return openStudy('edit')
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyCrossNote')) return openStudy('cross')
         if (matchesSequenceToken(e, overrides, 'vim.leaderStudyReview')) {
           e.preventDefault()
           e.stopImmediatePropagation()
@@ -854,6 +870,13 @@ export function VimNav(): JSX.Element | null {
           e.stopImmediatePropagation()
           resetLeader()
           void state.openStudyDashboard()
+          return
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyGraph')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          void state.openConceptGraph()
           return
         }
         resetLeader()
@@ -1898,6 +1921,8 @@ export function VimNav(): JSX.Element | null {
     } else if (itemType === 'study') {
       // Study row opens the gamified study dashboard. Matches clicking the row.
       void state.openStudyDashboard()
+    } else if (itemType === 'concept-graph') {
+      void state.openConceptGraph()
     } else if (itemType === 'help') {
       void state.openHelpView()
     } else if (itemType === 'settings') {

@@ -285,6 +285,15 @@ export const TargetIcon = (p: IconProps): JSX.Element => (
   </I>
 )
 
+export const GraphIcon = (p: IconProps): JSX.Element => (
+  <I {...p}>
+    <circle cx="6" cy="6" r="2.4" />
+    <circle cx="18" cy="8" r="2.4" />
+    <circle cx="11" cy="18" r="2.4" />
+    <path d="M7.7 7.6 9.4 16M8.2 6.7 15.6 7.6M16.6 9.9 12.3 16" />
+  </I>
+)
+
 export const ExpandAllIcon = (p: IconProps): JSX.Element => (
   <I {...p}>
     <path d="m7 15 5 5 5-5" />

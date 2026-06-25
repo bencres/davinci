@@ -6,6 +6,7 @@ import {
   findSourceQuoteOffset,
   isStudyTabPath,
   notePathFromStudyTab,
+  ratingToNumber,
   scoreRubric,
   scoreToRating,
   type Flashcard,
@@ -28,7 +29,6 @@ const RATINGS: { id: FsrsRating; label: string; key: string; tone: string }[] = 
   { id: 'good', label: 'Good', key: '3', tone: 'bg-sky-500/12 text-sky-700 ring-sky-500/30' },
   { id: 'easy', label: 'Easy', key: '4', tone: 'bg-emerald-500/12 text-emerald-700 ring-emerald-500/30' }
 ]
-const RATING_NUM: Record<FsrsRating, number> = { again: 1, hard: 2, good: 3, easy: 4 }
 
 function CardBadge({ card }: { card: Flashcard }): JSX.Element {
   const recall = card.kind === 'recall'
@@ -242,15 +242,38 @@ export function StudyView({ tabPath, isActive }: Props): JSX.Element {
 
   if (phase === 'summary') {
     const reviewed = grades.length
+    const isRight = (g: (typeof grades)[number]): boolean => g.rating === 'good' || g.rating === 'easy'
     const dist = RATINGS.map((r) => ({
       ...r,
       count: grades.filter((g) => g.rating === r.id).length
     }))
-    const calibrationErrors = grades.map((g) => Math.abs(RATING_NUM[g.predictedRating] - RATING_NUM[g.rating]))
+    const correct = grades.filter(isRight).length
+    const accuracy = reviewed > 0 ? Math.round((correct / reviewed) * 100) : 0
+    const calibrationErrors = grades.map((g) => Math.abs(ratingToNumber(g.predictedRating) - ratingToNumber(g.rating)))
     const meanError =
       calibrationErrors.length > 0
         ? calibrationErrors.reduce((a, b) => a + b, 0) / calibrationErrors.length
         : 0
+    // Session time from grade timestamps (first → last), and a rough per-card avg.
+    const times = grades.map((g) => Date.parse(g.reviewedAt)).filter((t) => Number.isFinite(t))
+    const elapsedMs = times.length >= 2 ? Math.max(...times) - Math.min(...times) : 0
+    const fmtDuration = (ms: number): string => {
+      const s = Math.round(ms / 1000)
+      const m = Math.floor(s / 60)
+      return m > 0 ? `${m}m ${s % 60}s` : `${s}s`
+    }
+    // Per-concept breakdown (focus concept of each reviewed card).
+    const byConcept = new Map<string, { total: number; correct: number }>()
+    for (const g of grades) {
+      const concept = index?.[g.cardId]?.card.concepts[0] ?? '—'
+      const e = byConcept.get(concept) ?? { total: 0, correct: 0 }
+      e.total++
+      if (isRight(g)) e.correct++
+      byConcept.set(concept, e)
+    }
+    const conceptRows = [...byConcept.entries()]
+      .sort((a, b) => b[1].total - a[1].total || a[0].localeCompare(b[0]))
+      .slice(0, 5)
     return (
       <StudyShell>
         <div className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-5 text-center">
@@ -262,7 +285,14 @@ export function StudyView({ tabPath, isActive }: Props): JSX.Element {
             <>
               <p className="text-sm text-ink-500">
                 Reviewed <span className="font-medium text-ink-800">{reviewed}</span> card
-                {reviewed === 1 ? '' : 's'}.
+                {reviewed === 1 ? '' : 's'} ·{' '}
+                <span className="font-medium text-ink-800">{accuracy}%</span> correct
+                {elapsedMs > 0 && (
+                  <>
+                    {' '}
+                    · <span className="font-medium text-ink-800">{fmtDuration(elapsedMs)}</span>
+                  </>
+                )}
               </p>
               <div className="flex flex-wrap items-center justify-center gap-2">
                 {dist.map((d) => (
@@ -278,6 +308,23 @@ export function StudyView({ tabPath, isActive }: Props): JSX.Element {
                 Calibration error (predicted vs. actual):{' '}
                 <span className="font-medium text-ink-800">{meanError.toFixed(2)}</span> / 3
               </p>
+              {conceptRows.length > 1 && (
+                <div className="w-full text-left">
+                  <p className="mb-1.5 text-2xs uppercase tracking-[0.12em] text-ink-500">
+                    By concept
+                  </p>
+                  <ul className="space-y-1">
+                    {conceptRows.map(([concept, e]) => (
+                      <li key={concept} className="flex items-baseline justify-between gap-2 text-xs">
+                        <span className="truncate text-ink-700">{concept}</span>
+                        <span className="shrink-0 text-ink-500">
+                          {e.correct}/{e.total}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </>
           )}
           <button

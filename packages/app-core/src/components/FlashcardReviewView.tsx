@@ -363,6 +363,20 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                 className={inputClass}
               />
             </Field>
+            <label className="flex items-start gap-2 text-sm text-ink-800">
+              <input
+                type="checkbox"
+                checked={genOptions.crossNote}
+                onChange={(e) => setGenOption({ crossNote: e.target.checked })}
+                className="mt-0.5"
+              />
+              <span>
+                Cross-note synthesis
+                <span className="ml-1 text-xs text-ink-500">
+                  — also make cards connecting this note to its wiki-linked notes.
+                </span>
+              </span>
+            </label>
             <div className="text-xs text-ink-500">
               The model is set in Settings → Study. Card count still follows the note's concepts and a per-run cap.
             </div>
