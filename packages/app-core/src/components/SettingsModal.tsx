@@ -229,6 +229,8 @@ export function SettingsModal(): JSX.Element {
   const setWhichKeyHintMode = useStore((s) => s.setWhichKeyHintMode)
   const whichKeyHintTimeoutMs = useStore((s) => s.whichKeyHintTimeoutMs)
   const setWhichKeyHintTimeoutMs = useStore((s) => s.setWhichKeyHintTimeoutMs)
+  const leaderToggle = useStore((s) => s.leaderToggle)
+  const setLeaderToggle = useStore((s) => s.setLeaderToggle)
   const vaultTextSearchBackend = useStore((s) => s.vaultTextSearchBackend)
   const setVaultTextSearchBackend = useStore((s) => s.setVaultTextSearchBackend)
   const ripgrepBinaryPath = useStore((s) => s.ripgrepBinaryPath)
@@ -1105,6 +1107,13 @@ export function SettingsModal(): JSX.Element {
                     )}
                   </>
                 )}
+                <ToggleRow
+                  label="Leader key toggles overlay"
+                  description="Press the Leader key again to dismiss a pending leader sequence. When off, a second Leader press re-arms it instead."
+                  value={leaderToggle}
+                  settingId="leader-key-toggle"
+                  onChange={setLeaderToggle}
+                />
               </>
             ) : (
               <InlineNote>

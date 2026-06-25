@@ -61,7 +61,6 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
 
   const updateDraftCard = useStore((s) => s.updateDraftCard)
   const toggleDraftCardKept = useStore((s) => s.toggleDraftCardKept)
-  const removeDraftCard = useStore((s) => s.removeDraftCard)
   const saveReviewedFlashcards = useStore((s) => s.saveReviewedFlashcards)
   const generateForActive = useStore((s) => s.generateFlashcardsForActiveNote)
   const setFocusedPanel = useStore((s) => s.setFocusedPanel)
@@ -161,11 +160,6 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
         setEditingIndex((cur) => (cur === safeFocus ? null : safeFocus))
         return
       }
-      if (seq('flashcards.reviewDiscard')) {
-        consume()
-        removeDraftCard(safeFocus)
-        return
-      }
       if (seq('flashcards.reviewRegenerate')) {
         consume()
         setEditingIndex(null)
@@ -184,7 +178,6 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
     editingIndex,
     save,
     toggleDraftCardKept,
-    removeDraftCard,
     generateForActive,
     closeActiveNote
   ])
@@ -321,14 +314,7 @@ export function FlashcardReviewView({ tabPath, isActive }: Props): JSX.Element {
                               : 'bg-emerald-500/12 text-emerald-700 hover:bg-emerald-500/18'
                           ].join(' ')}
                         >
-                          {discarded ? 'Keep' : 'Kept'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeDraftCard(index)}
-                          className="rounded-lg bg-red-500/10 px-2.5 py-1 text-xs font-medium text-[rgb(var(--z-red))] hover:bg-red-500/16"
-                        >
-                          Remove
+                          {discarded ? 'Discarded' : 'Kept'}
                         </button>
                       </div>
                     </div>

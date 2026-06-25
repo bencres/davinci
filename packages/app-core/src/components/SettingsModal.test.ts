@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => {
       whichKeyHintMode: 'timed',
       whichKeyHintTimeoutMs: 1200,
       whichKeyHints: true,
+      leaderToggle: true,
       workspaceMode: 'local'
     },
     {

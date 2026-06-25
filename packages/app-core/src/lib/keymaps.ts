@@ -96,7 +96,6 @@ export type KeymapId =
   | "flashcards.reviewPrev"
   | "flashcards.reviewToggleKeep"
   | "flashcards.reviewEdit"
-  | "flashcards.reviewDiscard"
   | "flashcards.reviewRegenerate"
   | "flashcards.reviewSave";
 
@@ -1001,16 +1000,6 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     title: "Study review: edit card",
     description: "Edit the focused draft card's fields.",
     defaultBinding: "e",
-    maxTokens: 1,
-  },
-  {
-    id: "flashcards.reviewDiscard",
-    kind: "sequence",
-    scope: "views",
-    group: "view-actions",
-    title: "Study review: remove card",
-    description: "Remove the focused draft card from the review batch.",
-    defaultBinding: "d",
     maxTokens: 1,
   },
   {

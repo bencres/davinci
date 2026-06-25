@@ -316,6 +316,8 @@ interface Prefs {
   whichKeyHintMode: WhichKeyHintMode
   /** How long the leader hint overlay and pending leader sequence stay visible/armed. */
   whichKeyHintTimeoutMs: number
+  /** When true, pressing the leader key again dismisses a pending leader sequence. */
+  leaderToggle: boolean
   /** Which engine powers vault-wide text search. */
   vaultTextSearchBackend: VaultTextSearchBackendPreference
   /** Optional explicit binary path for ripgrep. Blank uses PATH lookup. */
@@ -468,6 +470,7 @@ const DEFAULT_PREFS: Prefs = {
   whichKeyHints: true,
   whichKeyHintMode: 'timed',
   whichKeyHintTimeoutMs: 900,
+  leaderToggle: true,
   vaultTextSearchBackend: 'auto',
   ripgrepBinaryPath: null,
   fzfBinaryPath: null,
@@ -561,6 +564,10 @@ function normalizePrefs(p: Partial<Prefs>): Prefs {
       typeof p.whichKeyHintTimeoutMs === 'number'
         ? Math.min(3000, Math.max(400, Math.round(p.whichKeyHintTimeoutMs)))
         : DEFAULT_PREFS.whichKeyHintTimeoutMs,
+    leaderToggle:
+      typeof p.leaderToggle === 'boolean'
+        ? p.leaderToggle
+        : DEFAULT_PREFS.leaderToggle,
     vaultTextSearchBackend:
       p.vaultTextSearchBackend &&
       VALID_VAULT_TEXT_SEARCH_BACKENDS.includes(p.vaultTextSearchBackend)
@@ -1231,6 +1238,7 @@ function collectPrefs(s: {
   whichKeyHints: boolean
   whichKeyHintMode: WhichKeyHintMode
   whichKeyHintTimeoutMs: number
+  leaderToggle: boolean
   vaultTextSearchBackend: VaultTextSearchBackendPreference
   ripgrepBinaryPath: string | null
   fzfBinaryPath: string | null
@@ -1291,6 +1299,7 @@ function collectPrefs(s: {
     whichKeyHints: s.whichKeyHints,
     whichKeyHintMode: s.whichKeyHintMode,
     whichKeyHintTimeoutMs: s.whichKeyHintTimeoutMs,
+    leaderToggle: s.leaderToggle,
     vaultTextSearchBackend: s.vaultTextSearchBackend,
     ripgrepBinaryPath: s.ripgrepBinaryPath,
     fzfBinaryPath: s.fzfBinaryPath,
@@ -1658,6 +1667,7 @@ interface Store {
   whichKeyHints: boolean
   whichKeyHintMode: WhichKeyHintMode
   whichKeyHintTimeoutMs: number
+  leaderToggle: boolean
   vaultTextSearchBackend: VaultTextSearchBackendPreference
   ripgrepBinaryPath: string | null
   fzfBinaryPath: string | null
@@ -1885,8 +1895,6 @@ interface Store {
   updateDraftCard: (index: number, patch: Partial<FlashcardDraft>) => void
   /** Toggle a draft card's keep/discard state. */
   toggleDraftCardKept: (index: number) => void
-  /** Remove a draft card from the review batch. */
-  removeDraftCard: (index: number) => void
   /** Promote the kept draft cards to stored cards and merge into the note's deck. */
   saveReviewedFlashcards: (acceptedIndexes: number[]) => Promise<void>
   /** Read a note's saved deck into `flashcardDeckByNote`. */
@@ -2006,6 +2014,7 @@ interface Store {
   setWhichKeyHints: (on: boolean) => void
   setWhichKeyHintMode: (mode: WhichKeyHintMode) => void
   setWhichKeyHintTimeoutMs: (ms: number) => void
+  setLeaderToggle: (on: boolean) => void
   setVaultTextSearchBackend: (backend: VaultTextSearchBackendPreference) => void
   setRipgrepBinaryPath: (path: string | null) => void
   setFzfBinaryPath: (path: string | null) => void
@@ -3086,6 +3095,7 @@ export const useStore = create<Store>((set, get) => {
   whichKeyHints: loadPrefs().whichKeyHints,
   whichKeyHintMode: loadPrefs().whichKeyHintMode,
   whichKeyHintTimeoutMs: loadPrefs().whichKeyHintTimeoutMs,
+  leaderToggle: loadPrefs().leaderToggle,
   vaultTextSearchBackend: loadPrefs().vaultTextSearchBackend,
   ripgrepBinaryPath: loadPrefs().ripgrepBinaryPath,
   fzfBinaryPath: loadPrefs().fzfBinaryPath,
@@ -3603,17 +3613,6 @@ export const useStore = create<Store>((set, get) => {
       const next = s.flashcardDraftKept.slice()
       next[index] = !next[index]
       return { flashcardDraftKept: next }
-    })
-  },
-
-  removeDraftCard: (index) => {
-    set((s) => {
-      if (index < 0 || index >= s.flashcardDraftCards.length) return {}
-      return {
-        flashcardDraftCards: s.flashcardDraftCards.filter((_, i) => i !== index),
-        flashcardDraftKept: s.flashcardDraftKept.filter((_, i) => i !== index),
-        flashcardDraftEdited: s.flashcardDraftEdited.filter((_, i) => i !== index)
-      }
     })
   },
 
@@ -4877,6 +4876,10 @@ export const useStore = create<Store>((set, get) => {
   },
   setWhichKeyHintTimeoutMs: (ms) => {
     set({ whichKeyHintTimeoutMs: Math.min(3000, Math.max(400, Math.round(ms))) })
+    savePrefs(collectPrefs(get()))
+  },
+  setLeaderToggle: (on) => {
+    set({ leaderToggle: on })
     savePrefs(collectPrefs(get()))
   },
   setVaultTextSearchBackend: (backend) => {

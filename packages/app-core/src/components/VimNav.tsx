@@ -597,7 +597,10 @@ export function VimNav(): JSX.Element | null {
         return
       }
 
-      // Cancel a pending leader sequence on Escape or a second leader press.
+      // Cancel a pending leader sequence on Escape, or — when the leaderToggle
+      // setting is on — on a second leader press (so Space opens then closes the
+      // leader overlay). With it off, a second leader press falls through and
+      // re-arms the leader below instead.
       if (leaderPending.current && e.key === 'Escape') {
         e.preventDefault()
         e.stopImmediatePropagation()
@@ -605,6 +608,7 @@ export function VimNav(): JSX.Element | null {
         return
       }
       if (
+        state.leaderToggle &&
         leaderPending.current &&
         sequenceTokenFromEvent(e) === leaderToken
       ) {
