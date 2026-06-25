@@ -126,10 +126,10 @@ describe('normalizeDraft', () => {
     expect(d?.prerequisites).toEqual(['p', 'q', 'r'])
   })
 
-  it('clamps difficulty into 1–5 and defaults when invalid', () => {
-    expect(normalizeDraft(recallDraft({ difficulty: 9 }))?.difficulty).toBe(5)
+  it('clamps difficulty into 1–4 and defaults to Moderate when invalid', () => {
+    expect(normalizeDraft(recallDraft({ difficulty: 9 }))?.difficulty).toBe(4)
     expect(normalizeDraft(recallDraft({ difficulty: 0 }))?.difficulty).toBe(1)
-    expect(normalizeDraft(recallDraft({ difficulty: 'x' }))?.difficulty).toBe(3)
+    expect(normalizeDraft(recallDraft({ difficulty: 'x' }))?.difficulty).toBe(2)
   })
 
   it('enforces the grading contract', () => {
@@ -209,15 +209,14 @@ describe('findSourceQuoteOffset', () => {
 })
 
 describe('difficultyLabel', () => {
-  it('maps 1–5 to labels and clamps out-of-range/fractional values', () => {
-    expect(difficultyLabel(1)).toBe('Trivial')
-    expect(difficultyLabel(2)).toBe('Easy')
-    expect(difficultyLabel(3)).toBe('Moderate')
-    expect(difficultyLabel(4)).toBe('Hard')
-    expect(difficultyLabel(5)).toBe('Very hard')
-    expect(difficultyLabel(0)).toBe('Trivial')
+  it('maps 1–4 to labels and clamps out-of-range/fractional values', () => {
+    expect(difficultyLabel(1)).toBe('Easy')
+    expect(difficultyLabel(2)).toBe('Moderate')
+    expect(difficultyLabel(3)).toBe('Hard')
+    expect(difficultyLabel(4)).toBe('Very hard')
+    expect(difficultyLabel(0)).toBe('Easy')
     expect(difficultyLabel(9)).toBe('Very hard')
-    expect(difficultyLabel(3.4)).toBe('Moderate')
+    expect(difficultyLabel(2.4)).toBe('Moderate')
   })
 })
 
