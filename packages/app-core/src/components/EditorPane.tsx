@@ -2379,7 +2379,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
         if (isStudyDashboardTabPath(path)) {
           return {
             ...base,
-            title: 'Study',
+            title: 'Study Dashboard',
             isStudy: true
           }
         }

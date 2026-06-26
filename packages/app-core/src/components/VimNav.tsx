@@ -214,7 +214,7 @@ export function VimNav(): JSX.Element | null {
         },
         {
           keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyReview'),
-          label: 'Review due cards',
+          label: 'Start study session',
           detail: 'Start a spaced-repetition session over all due cards in the vault.'
         },
         {

@@ -12,7 +12,7 @@ import {
   type FsrsRating,
   type GradedCriterion
 } from '@shared/flashcards'
-import { matchesSequenceToken } from '../lib/keymaps'
+import { matchesSequenceToken, getKeymapDisplay } from '../lib/keymaps'
 import { isAppOverlayOpen } from '../lib/overlay-open'
 import { ArrowUpRightIcon } from './icons'
 
@@ -178,7 +178,7 @@ export function StudyView({ tabPath, isActive }: Props): JSX.Element {
       if (seq('study.flip')) {
         consume()
         if (phase === 'front') revealCurrentCard()
-        // After reveal, Space confirms the suggested rating on synthesis cards.
+        // After reveal, the flip key confirms the suggested rating on synthesis cards.
         else if (card?.kind === 'synthesis') grade(suggestedRating)
         return
       }
@@ -415,7 +415,7 @@ export function StudyView({ tabPath, isActive }: Props): JSX.Element {
             onClick={() => revealCurrentCard()}
             className="mt-4 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent/90"
           >
-            Reveal <span className="ml-1 opacity-70">Space</span>
+            Reveal <span className="ml-1 opacity-70">{getKeymapDisplay(keymapOverrides, 'study.flip')}</span>
           </button>
         </div>
       )}
