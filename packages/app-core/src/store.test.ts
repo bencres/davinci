@@ -927,3 +927,39 @@ describe('viewSettingsScope (#292 — global vs per-vault)', () => {
     expect(useStore.getState().noteSortOrder).toBe('name-asc')
   })
 })
+
+describe('pdfExportUseTheme — theme in PDF export', () => {
+  it('defaults off and round-trips through persistence', async () => {
+    installZen()
+    const { useStore } = await loadStore()
+    expect(useStore.getState().pdfExportUseTheme).toBe(false)
+
+    useStore.getState().setPdfExportUseTheme(true)
+    expect(useStore.getState().pdfExportUseTheme).toBe(true)
+    // collectPrefs persisted it to localStorage.
+    const saved = JSON.parse(localStorage.getItem('zen:prefs:v2') ?? '{}')
+    expect(saved.pdfExportUseTheme).toBe(true)
+
+    // A fresh module instance reads it back via loadPrefs → normalizePrefs.
+    vi.resetModules()
+    const reloaded = await import('./store')
+    expect(reloaded.useStore.getState().pdfExportUseTheme).toBe(true)
+  })
+
+  it('normalizes missing and non-boolean stored values to false', async () => {
+    installZen()
+    await loadStore() // fresh module + cleared storage
+
+    // Non-boolean → default.
+    localStorage.setItem('zen:prefs:v2', JSON.stringify({ pdfExportUseTheme: 'yes' }))
+    vi.resetModules()
+    const bad = await import('./store')
+    expect(bad.useStore.getState().pdfExportUseTheme).toBe(false)
+
+    // Missing → default.
+    localStorage.setItem('zen:prefs:v2', JSON.stringify({ themeId: 'dark-hard' }))
+    vi.resetModules()
+    const missing = await import('./store')
+    expect(missing.useStore.getState().pdfExportUseTheme).toBe(false)
+  })
+})

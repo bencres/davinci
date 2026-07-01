@@ -506,6 +506,8 @@ export function SettingsModal(): JSX.Element {
   const setDarkSidebar = useStore((s) => s.setDarkSidebar)
   const showSidebarChevrons = useStore((s) => s.showSidebarChevrons)
   const setShowSidebarChevrons = useStore((s) => s.setShowSidebarChevrons)
+  const pdfExportUseTheme = useStore((s) => s.pdfExportUseTheme)
+  const setPdfExportUseTheme = useStore((s) => s.setPdfExportUseTheme)
   const appUpdateState = useAppUpdateState()
   const [editingRemoteProfile, setEditingRemoteProfile] = useState<{
     mode: 'create' | 'edit'
@@ -1435,6 +1437,19 @@ export function SettingsModal(): JSX.Element {
               value={showSidebarChevrons}
               settingId="sidebar-arrows"
               onChange={setShowSidebarChevrons}
+            />
+          </Section>
+
+          <Section
+            title="PDF export"
+            description="How notes look when you export them to PDF."
+          >
+            <ToggleRow
+              label="Use theme for PDF export"
+              description="On: exported PDFs use your current theme — colors and dark/light, including custom themes. Off: a clean light theme, best for printing on paper."
+              value={pdfExportUseTheme}
+              settingId="pdf-export-use-theme"
+              onChange={setPdfExportUseTheme}
             />
           </Section>
         </div>

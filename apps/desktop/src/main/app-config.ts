@@ -155,6 +155,11 @@ const SCALAR_FIELDS: Partial<Record<PortablePrefKey, ScalarFieldMap>> = {
     comment: 'compact | full'
   },
   // appearance
+  pdfExportUseTheme: {
+    section: 'appearance',
+    tomlKey: 'pdf_export_use_theme',
+    comment: 'true | false — export PDFs using the current theme instead of a clean light print theme'
+  },
   themeFamily: {
     section: 'appearance',
     tomlKey: 'theme_family',

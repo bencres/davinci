@@ -51,6 +51,7 @@ export const PORTABLE_PREF_KEYS = [
   'wordWrap',
   'previewSmoothScroll',
   'pdfEmbedInEditMode',
+  'pdfExportUseTheme',
   // appearance
   'themeId',
   'themeFamily',
@@ -141,6 +142,7 @@ export const PORTABLE_DEFAULTS: Record<PortablePrefKey, unknown> = {
   wordWrap: true,
   previewSmoothScroll: true,
   pdfEmbedInEditMode: 'compact',
+  pdfExportUseTheme: false,
   themeId: 'dark-hard',
   themeFamily: 'gruvbox',
   themeMode: 'dark',

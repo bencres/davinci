@@ -385,6 +385,9 @@ interface Prefs {
   /** Whether note-list/view prefs (sort, grouping, tasks view, …) apply the
    *  same everywhere ('global') or independently per vault ('vault'). (#292) */
   viewSettingsScope: 'global' | 'vault'
+  /** Export PDFs using the current theme (colors + dark/light, incl. custom
+   *  themes) instead of the default clean light-for-print theme. */
+  pdfExportUseTheme: boolean
   /** Font used by the whole app chrome (sidebar, menus, title bar). */
   interfaceFont: string | null
   /** Font used inside the editor + preview content. */
@@ -603,6 +606,7 @@ export const DEFAULT_PREFS: Prefs = {
   lineNumberMode: 'off',
   lineNumberPosition: 'text',
   viewSettingsScope: 'global',
+  pdfExportUseTheme: false,
   // Leave all font slots on the built-in "Default" path. That lets the
   // shipped CSS fallbacks choose sensible system fonts on each machine
   // instead of forcing a specific family that may not exist.
@@ -733,6 +737,10 @@ function normalizePrefs(p: Partial<Prefs>): Prefs {
         ? p.lineNumberMode
         : DEFAULT_PREFS.lineNumberMode,
     viewSettingsScope: p.viewSettingsScope === 'vault' ? 'vault' : 'global',
+    pdfExportUseTheme:
+      typeof p.pdfExportUseTheme === 'boolean'
+        ? p.pdfExportUseTheme
+        : DEFAULT_PREFS.pdfExportUseTheme,
     lineNumberPosition:
       p.lineNumberPosition && VALID_LINE_NUMBER_POSITIONS.includes(p.lineNumberPosition)
         ? p.lineNumberPosition
@@ -1452,6 +1460,7 @@ function collectPrefs(s: {
   lineNumberMode: LineNumberMode
   lineNumberPosition: LineNumberPosition
   viewSettingsScope: 'global' | 'vault'
+  pdfExportUseTheme: boolean
   interfaceFont: string | null
   textFont: string | null
   monoFont: string | null
@@ -1515,6 +1524,7 @@ function collectPrefs(s: {
     previewMaxWidth: s.previewMaxWidth,
     lineNumberMode: s.lineNumberMode,
     viewSettingsScope: s.viewSettingsScope,
+    pdfExportUseTheme: s.pdfExportUseTheme,
     lineNumberPosition: s.lineNumberPosition,
     interfaceFont: s.interfaceFont,
     textFont: s.textFont,
@@ -1942,6 +1952,7 @@ interface Store {
   lineNumberMode: LineNumberMode
   lineNumberPosition: LineNumberPosition
   viewSettingsScope: 'global' | 'vault'
+  pdfExportUseTheme: boolean
   interfaceFont: string | null
   textFont: string | null
   monoFont: string | null
@@ -2271,6 +2282,7 @@ interface Store {
   setPreviewMaxWidth: (px: number) => void
   setLineNumberMode: (mode: LineNumberMode) => void
   setViewSettingsScope: (scope: 'global' | 'vault') => void
+  setPdfExportUseTheme: (on: boolean) => void
   setLineNumberPosition: (position: LineNumberPosition) => void
   setInterfaceFont: (family: string | null) => void
   setTextFont: (family: string | null) => void
@@ -3373,6 +3385,7 @@ export const useStore = create<Store>((set, get) => {
   previewMaxWidth: loadPrefs().previewMaxWidth,
   lineNumberMode: loadPrefs().lineNumberMode,
   viewSettingsScope: loadPrefs().viewSettingsScope,
+  pdfExportUseTheme: loadPrefs().pdfExportUseTheme,
   lineNumberPosition: loadPrefs().lineNumberPosition,
   interfaceFont: loadPrefs().interfaceFont,
   textFont: loadPrefs().textFont,
@@ -5147,6 +5160,10 @@ export const useStore = create<Store>((set, get) => {
   },
   setWrapTabs: (on) => {
     set({ wrapTabs: on })
+    savePrefs(collectPrefs(get()))
+  },
+  setPdfExportUseTheme: (on) => {
+    set({ pdfExportUseTheme: on })
     savePrefs(collectPrefs(get()))
   },
   setSettingsOpen: (open) => set({ settingsOpen: open }),
