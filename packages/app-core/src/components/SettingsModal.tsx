@@ -29,6 +29,7 @@ import { useStore, refreshCustomThemes, refreshOverrides } from '../store'
 import type { LineNumberMode, WhichKeyHintMode } from '../store'
 import type { KeymapDefinition, KeymapId, KeymapOverrides } from '../lib/keymaps'
 import {
+  findKeymapConflict,
   formatKeymapBinding,
   getKeymapBinding,
   getKeymapDefinitionsByGroup,
@@ -3578,6 +3579,7 @@ function KeymapSettings({
                 {group.items.map((definition) => {
                   const current = getKeymapBinding(overrides, definition.id)
                   const custom = !!overrides[definition.id]
+                  const conflict = findKeymapConflict(overrides, definition.id, current)
                   const inactive =
                     (definition.vimOnly && !vimMode) ||
                     (definition.nonVimOnly && vimMode)
@@ -3599,6 +3601,14 @@ function KeymapSettings({
                           {custom && (
                             <span className="rounded-full border border-accent/25 bg-accent/10 px-2 py-0.5 text-2xs font-medium uppercase tracking-[0.14em] text-accent">
                               Custom
+                            </span>
+                          )}
+                          {conflict && (
+                            <span
+                              className="rounded-full border border-danger/35 bg-danger/10 px-2 py-0.5 text-2xs font-medium uppercase tracking-[0.14em] text-danger"
+                              title={`Also bound to “${conflict.title}”. Two global shortcuts on one key means one is ignored — reassign one to resolve.`}
+                            >
+                              Conflicts with {conflict.title}
                             </span>
                           )}
                         </div>
@@ -3646,6 +3656,7 @@ function KeymapSettings({
       {recording && (
         <KeymapRecorderModal
           definition={recording}
+          overrides={overrides}
           currentBinding={getKeymapBinding(overrides, recording.id)}
           onClose={() => setRecording(null)}
           onSave={(binding) => {
@@ -3660,17 +3671,21 @@ function KeymapSettings({
 
 function KeymapRecorderModal({
   definition,
+  overrides,
   currentBinding,
   onClose,
   onSave
 }: {
   definition: KeymapDefinition
+  overrides: KeymapOverrides
   currentBinding: string
   onClose: () => void
   onSave: (binding: string) => void
 }): JSX.Element {
   const [binding, setBinding] = useState(currentBinding)
   const mac = isMacPlatform()
+  // Block saving a global shortcut that another action already owns (#298).
+  const conflict = binding ? findKeymapConflict(overrides, definition.id, binding) : null
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -3742,6 +3757,15 @@ function KeymapRecorderModal({
                 : `Press the sequence you want. Backspace removes the last token, and multi-step sequences stop at ${definition.maxTokens ?? 2} key${(definition.maxTokens ?? 2) === 1 ? '' : 's'}.`}
             </div>
           </div>
+          {conflict && (
+            <div className="mt-3 flex items-start gap-2 rounded-xl border border-danger/35 bg-danger/10 px-3 py-2.5 text-xs leading-5 text-danger">
+              <span aria-hidden>⚠</span>
+              <span>
+                Already used by <strong className="font-semibold">{conflict.title}</strong>.
+                Two global shortcuts can’t share a key — reset or reassign that one first.
+              </span>
+            </div>
+          )}
           <div className="mt-3 text-xs text-ink-500">
             Current: {formatKeymapBinding(currentBinding, definition.kind)}
           </div>
@@ -3768,7 +3792,7 @@ function KeymapRecorderModal({
             <Button
               variant="primary"
               size="sm"
-              disabled={!binding}
+              disabled={!binding || !!conflict}
               onClick={() => onSave(binding)}
             >
               Save
