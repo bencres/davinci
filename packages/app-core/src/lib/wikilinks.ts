@@ -103,6 +103,35 @@ export function resolveWikilinkTarget<T extends NoteRef>(notes: T[], target: str
   return visible.find((note) => normalizeForCompare(note.title) === needle) ?? null
 }
 
+/**
+ * Resolve a `![[drawing.excalidraw]]` embed target to its drawing note. Drawings
+ * live in the notes tree but keep their `.excalidraw` extension, so the generic
+ * `resolveWikilinkTarget` (which is `.md`-centric for path-like targets) can't
+ * match them. We match against note paths with the extension intact, then fall
+ * back to a bare-name title match.
+ */
+export function resolveExcalidrawEmbed<T extends NoteRef>(notes: T[], target: string): T | null {
+  const doc = stripWikilinkAnchor(target).trim()
+  if (!doc) return null
+  const visible = notes.filter((note) => note.folder !== 'trash')
+
+  // Path-like or extension-bearing targets: match the (suffix of the) full path.
+  const needle = normalizeForCompare(normalizeSlashes(doc)).replace(/^\/+/, '')
+  if (needle.includes('/') || /\.excalidraw$/i.test(needle)) {
+    const exact = visible.find((note) => normalizeForCompare(note.path) === needle)
+    if (exact) return exact
+    const suffix = `/${needle}`
+    const matches = visible.filter((note) => normalizeForCompare(note.path).endsWith(suffix))
+    if (matches.length === 1) return matches[0]
+  }
+
+  // Bare name: match the drawing's title (filename without extension).
+  const base = needle.split('/').pop() ?? needle
+  const titleNeedle = base.replace(/\.excalidraw$/i, '')
+  if (!titleNeedle) return null
+  return visible.find((note) => normalizeForCompare(note.title) === titleNeedle) ?? null
+}
+
 export function backlinksForNote<T extends NoteRef & Pick<NoteMeta, 'wikilinks'>>(
   notes: T[],
   current: Pick<NoteMeta, 'path'>

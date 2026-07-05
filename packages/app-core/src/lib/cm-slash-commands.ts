@@ -1,5 +1,7 @@
 import type { CompletionContext, CompletionResult, Completion } from '@codemirror/autocomplete'
 import type { EditorView } from '@codemirror/view'
+import type { NoteFolder } from '@shared/ipc'
+import { excalidrawTitleFromPath } from '@shared/excalidraw'
 import { useStore } from '../store'
 
 interface SlashCmd {
@@ -46,6 +48,13 @@ const COMMANDS: SlashCmd[] = [
   { label: 'Link', detail: '[]', icon: '🔗', insert: '[]()', cursorOffset: -3 },
   { label: 'Image', detail: '![]', icon: '🖼', insert: '![]()', cursorOffset: -3 },
   { label: 'Page', detail: 'new note', icon: '📄', insert: '__PAGE__' },
+  {
+    label: 'Drawing',
+    detail: 'new .excalidraw',
+    icon: '✏️',
+    insert: '__DRAWING__',
+    keywords: 'excalidraw draw sketch canvas diagram whiteboard'
+  },
 ]
 
 /** Render a custom completion item matching the app theme. */
@@ -124,6 +133,35 @@ export function slashCommandSource(context: CompletionContext): CompletionResult
         _icon: cmd.icon,
         type: 'slash',
         apply: (view: EditorView, _completion: Completion, _from: number, to: number) => {
+          // Special: "Drawing" creates a new `.excalidraw` file in the same
+          // directory and inserts an embed wikilink at the cursor — without
+          // navigating away from the current note (unlike createDrawingAndOpen).
+          if (cmd.insert === '__DRAWING__') {
+            view.dispatch({
+              changes: { from: slashStart, to, insert: '' },
+              selection: { anchor: slashStart }
+            })
+            const state = useStore.getState()
+            const active = state.activeNote
+            const parts = active ? active.path.split('/') : ['inbox']
+            const folder = (parts[0] as NoteFolder) ?? 'inbox'
+            const subpath = active ? parts.slice(1, -1).join('/') : ''
+            void (async () => {
+              try {
+                const meta = await window.zen.createExcalidraw(folder, subpath)
+                await state.refreshNotes()
+                const link = `![[${excalidrawTitleFromPath(meta.path)}.excalidraw]]`
+                const at = view.state.selection.main.head
+                view.dispatch({
+                  changes: { from: at, insert: link },
+                  selection: { anchor: at + link.length }
+                })
+              } catch (err) {
+                console.error('create drawing failed', err)
+              }
+            })()
+            return
+          }
           // Special: "Page" creates a new note in the same directory
           if (cmd.insert === '__PAGE__') {
             view.dispatch({ changes: { from: slashStart, to, insert: '' } })
@@ -160,7 +198,7 @@ export function slashCommandSource(context: CompletionContext): CompletionResult
  * opens a new note via the store, which would navigate away from (and is
  * meaningless inside) the template editor.
  */
-const NON_TEMPLATE_COMMANDS = new Set(['Page'])
+const NON_TEMPLATE_COMMANDS = new Set(['Page', 'Drawing'])
 
 /**
  * Slash-command source for the template editor: the same block inserters as the

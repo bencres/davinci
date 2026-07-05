@@ -15,6 +15,7 @@ import type { Root as MdRoot } from 'mdast'
 import type { Root as HastRoot, Element as HastElement } from 'hast'
 import { recordRendererPerf } from './perf'
 import { classifyLocalAssetHref } from './local-assets'
+import { isExcalidrawPath } from '@shared/excalidraw'
 
 /**
  * Remark plugin: `[[target]]` and `[[target|label]]` → link nodes
@@ -29,6 +30,7 @@ const ALLOWED_RENDERED_URI_RE =
   /^(?:(?:https?|mailto|zen|zen-asset|blob|data):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
 const ALLOWED_RENDERED_DATA_ATTRS = [
   'data-callout',
+  'data-excalidraw-target',
   'data-function-plot-source',
   'data-jsxgraph-source',
   'data-local-asset-href',
@@ -69,8 +71,25 @@ function sanitizeRenderedHtml(html: string): string {
   })
 }
 
+function escapeHtmlAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
 function remarkWikilinks() {
   function buildWikilinkNode(bang: string, target: string, label: string): AnyNode {
+    if (bang === '!' && isExcalidrawPath(target)) {
+      // Placeholder element; Preview mounts an interactive read-only canvas into
+      // it (see renderExcalidrawEmbeds). Emitted as raw HTML so it survives
+      // remark-rehype + rehype-raw unchanged.
+      return {
+        type: 'html',
+        value: `<span class="excalidraw-embed" data-excalidraw-target="${escapeHtmlAttr(target)}"></span>`
+      }
+    }
     const assetKind = classifyLocalAssetHref(target)
     if (bang === '!' && assetKind === 'image') {
       return {

@@ -57,6 +57,15 @@ describe('renderMarkdown', () => {
     expect(html).toContain('alt="CleanShot 2026-04-13 at 14.31.31@2x.png"')
   })
 
+  it('renders ![[*.excalidraw]] embeds as a placeholder span', () => {
+    const html = renderMarkdown('![[My Sketch.excalidraw]]')
+
+    expect(html).toContain('class="excalidraw-embed"')
+    expect(html).toContain('data-excalidraw-target="My Sketch.excalidraw"')
+    // Not treated as a generic image/file link.
+    expect(html).not.toContain('<img')
+  })
+
   it('renders ==text== as <mark> (and survives the sanitizer)', () => {
     expect(renderMarkdown('==highlighted==')).toContain('<mark>highlighted</mark>')
     const two = renderMarkdown('==a== and ==b==')

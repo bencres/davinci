@@ -1,10 +1,16 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { createRoot, type Root } from "react-dom/client";
 import type { NoteMeta } from "@shared/ipc";
 import { renderMarkdown } from "../lib/markdown";
 import { useStore } from "../store";
 import { resolveAuto, THEMES } from "../lib/themes";
-import { resolveWikilinkTarget, wikilinkHeadingAnchor } from "../lib/wikilinks";
+import {
+  resolveExcalidrawEmbed,
+  resolveWikilinkTarget,
+  wikilinkHeadingAnchor,
+} from "../lib/wikilinks";
+import { LazyExcalidrawView } from "./LazyExcalidrawView";
 import { openWikilinkHeading } from "../lib/wikilink-navigation";
 import { externalLinkUrl, resolveInternalNoteHref } from "../lib/internal-links";
 import { toggleTaskAtIndex } from "../lib/tasklists";
@@ -42,6 +48,32 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { ArrowUpRightIcon, MaximizeIcon, MinimizeIcon } from "./icons";
 import { promptApp } from "../lib/prompt-requests";
 import { confirmApp } from "../lib/confirm-requests";
+
+// ---------------------------------------------------------------------------
+// Excalidraw: mount an interactive read-only canvas into each `![[*.excalidraw]]`
+// embed placeholder. Returns the created React roots so the caller can unmount
+// them on cleanup (avoids leaking roots across re-renders).
+// ---------------------------------------------------------------------------
+
+function renderExcalidrawEmbeds(root: HTMLElement, notes: NoteMeta[]): Root[] {
+  const roots: Root[] = [];
+  root
+    .querySelectorAll<HTMLElement>("span.excalidraw-embed")
+    .forEach((node) => {
+      const target = node.getAttribute("data-excalidraw-target") || "";
+      const resolved = resolveExcalidrawEmbed(notes, target);
+      if (!resolved) {
+        node.classList.add("broken");
+        node.textContent = target || "drawing";
+        return;
+      }
+      node.textContent = "";
+      const reactRoot = createRoot(node);
+      reactRoot.render(<LazyExcalidrawView path={resolved.path} viewMode />);
+      roots.push(reactRoot);
+    });
+  return roots;
+}
 
 // ---------------------------------------------------------------------------
 // Mermaid: lazy singleton + theme-aware render
@@ -711,6 +743,7 @@ export const Preview = memo(function Preview({
     const root = ref.current;
     if (!root) return;
     let cancelled = false;
+    let excalidrawRoots: Root[] = [];
 
     const stage = document.createElement("article");
     stage.innerHTML = html;
@@ -765,6 +798,10 @@ export const Preview = memo(function Preview({
       // not found" and zero-size boards (#68). Mermaid renders to inline SVG, so
       // it is safe to render in the detached buffer above.
       root.replaceChildren(...Array.from(stage.childNodes));
+      // Guard before mounting: if cleanup already ran (cancelled), skip mounting
+      // so we never leak roots the cleanup can't see.
+      if (cancelled) return;
+      excalidrawRoots = renderExcalidrawEmbeds(root, notes);
       await renderDiagrams(root, { themeKey: effectiveMode, expanded: false });
       if (cancelled) return;
       requestAnimationFrame(() => {
@@ -776,6 +813,13 @@ export const Preview = memo(function Preview({
 
     return () => {
       cancelled = true;
+      // Unmount on a microtask: React forbids unmounting a root synchronously
+      // from inside a render/effect cycle, and this cleanup can run during one.
+      const toUnmount = excalidrawRoots;
+      excalidrawRoots = [];
+      if (toUnmount.length > 0) {
+        queueMicrotask(() => toUnmount.forEach((r) => r.unmount()));
+      }
     };
   }, [
     assetFilesKey,
