@@ -5,7 +5,13 @@ const ExcalidrawViewImpl = lazy(() =>
 )
 
 /** Lazy boundary for the Excalidraw editor so its heavy bundle loads on demand. */
-export function LazyExcalidrawView({ path }: { path: string }): JSX.Element {
+export function LazyExcalidrawView({
+  path,
+  viewMode = false
+}: {
+  path: string
+  viewMode?: boolean
+}): JSX.Element {
   return (
     <Suspense
       fallback={
@@ -14,7 +20,7 @@ export function LazyExcalidrawView({ path }: { path: string }): JSX.Element {
         </div>
       }
     >
-      <ExcalidrawViewImpl path={path} />
+      <ExcalidrawViewImpl path={path} viewMode={viewMode} />
     </Suspense>
   )
 }

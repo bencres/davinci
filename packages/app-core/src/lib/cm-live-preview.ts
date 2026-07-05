@@ -16,6 +16,8 @@ import {
 } from './local-assets'
 import { setImageBlockDragPayload } from './image-block-dnd'
 import { assetTabPath } from './asset-tabs'
+import { resolveExcalidrawEmbed } from './wikilinks'
+import { isExcalidrawPath, parseExcalidrawDocument } from '@shared/excalidraw'
 
 /**
  * Live-preview extension: hides markdown syntax markers on lines where
@@ -215,6 +217,168 @@ function parseStandaloneLocalPdf(lineText: string): ParsedPdf | null {
     label: (fromEmbed[2] ?? '').trim(),
     href,
     resolvedUrl
+  }
+}
+
+type ParsedExcalidraw = {
+  href: string
+  /** Vault-relative path of the resolved `.excalidraw` file. */
+  path: string
+  /** Last-modified time of the drawing, used as the widget's content key so the
+   *  static preview re-renders after the drawing is edited elsewhere. */
+  modified: number
+}
+
+function parseStandaloneExcalidraw(lineText: string): ParsedExcalidraw | null {
+  const m = lineText.match(STANDALONE_OBSIDIAN_EMBED_RE)
+  if (!m) return null
+  const href = (m[1] ?? '').trim()
+  if (!isExcalidrawPath(href)) return null
+  const resolved = resolveExcalidrawEmbed(useStore.getState().notes, href)
+  if (!resolved) return null
+  return {
+    href,
+    path: resolved.path,
+    modified: (resolved as { updatedAt?: number }).updatedAt ?? 0
+  }
+}
+
+type ExcalidrawPreview = {
+  svg: string
+  /** The scene's canvas color, painted behind the (letterboxed) SVG so the
+   *  frame matches the drawing's background rather than the editor theme. */
+  background: string
+}
+
+/** Default Excalidraw canvas color when a scene doesn't set one. */
+const EXCALIDRAW_DEFAULT_BACKGROUND = '#ffffff'
+
+/** Cache of rendered previews keyed by `path@modified` so re-decorating a
+ *  visible drawing doesn't re-read the file or reload the heavy Excalidraw
+ *  bundle. The promise is shared across widget instances for the same key. */
+const excalidrawSvgCache = new Map<string, Promise<ExcalidrawPreview | null>>()
+
+function exportExcalidrawSvg(path: string, cacheKey: string): Promise<ExcalidrawPreview | null> {
+  const cached = excalidrawSvgCache.get(cacheKey)
+  if (cached) return cached
+  const promise = (async (): Promise<ExcalidrawPreview | null> => {
+    try {
+      const res = await window.zen.readNote(path)
+      const doc = parseExcalidrawDocument(res?.body ?? '')
+      if (doc.elements.length === 0) return null
+      const viewBackground = doc.appState?.viewBackgroundColor
+      const background =
+        typeof viewBackground === 'string' && viewBackground
+          ? viewBackground
+          : EXCALIDRAW_DEFAULT_BACKGROUND
+      const { exportToSvg } = await import('@excalidraw/excalidraw')
+      const svg = await exportToSvg({
+        elements: doc.elements,
+        // Paint the scene's own background into the export so the preview doesn't
+        // show the frame's theme-dependent color through a transparent canvas.
+        appState: { ...doc.appState, exportBackground: true },
+        files: doc.files ?? {}
+      } as unknown as Parameters<typeof exportToSvg>[0])
+      return { svg: svg.outerHTML, background }
+    } catch {
+      excalidrawSvgCache.delete(cacheKey)
+      return null
+    }
+  })()
+  excalidrawSvgCache.set(cacheKey, promise)
+  return promise
+}
+
+/** Read-only inline preview of an `![[drawing.excalidraw]]` embed: renders a
+ *  static SVG export at a fixed height with an "Open" button that jumps to the
+ *  full Excalidraw editor tab. Mirrors the LocalImage / LocalPdf widgets. */
+class ExcalidrawEmbedWidget extends WidgetType {
+  constructor(
+    private readonly path: string,
+    private readonly lineFrom: number,
+    private readonly modified: number
+  ) {
+    super()
+  }
+
+  eq(other: ExcalidrawEmbedWidget): boolean {
+    return (
+      other.path === this.path &&
+      other.lineFrom === this.lineFrom &&
+      other.modified === this.modified
+    )
+  }
+
+  toDOM(): HTMLElement {
+    const figure = document.createElement('figure')
+    figure.className = 'cm-excalidraw-embed'
+    figure.title = 'Double-click to open'
+
+    const frame = document.createElement('div')
+    frame.className = 'cm-excalidraw-embed-frame'
+
+    // The drawing (SVG export) / loading status lives in its own host so the
+    // overlaid controls survive when we swap in the rendered SVG.
+    const host = document.createElement('div')
+    host.className = 'cm-excalidraw-embed-host'
+
+    const status = document.createElement('div')
+    status.className = 'cm-excalidraw-embed-status'
+    status.textContent = 'Loading drawing…'
+    host.append(status)
+
+    // Controls overlay the drawing (frame is position: relative) and sit at its
+    // top-right. The edit button drops the cursor onto the source line so the
+    // raw `![[…]]` markdown can be edited.
+    const controls = document.createElement('div')
+    controls.className = 'cm-excalidraw-embed-controls'
+
+    const editButton = document.createElement('button')
+    editButton.type = 'button'
+    editButton.className = 'cm-excalidraw-embed-action'
+    editButton.textContent = '</>'
+    editButton.title = 'Edit this block'
+    editButton.setAttribute('aria-label', 'Edit this block')
+    editButton.addEventListener('mousedown', (event) => {
+      // Pre-empt the figure's double-click-to-open so editing the block never
+      // also opens the drawing tab.
+      event.stopPropagation()
+    })
+    editButton.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      const view = useStore.getState().editorViewRef
+      if (!view) return
+      view.dispatch({ selection: { anchor: this.lineFrom }, scrollIntoView: true })
+      view.focus()
+    })
+
+    controls.append(editButton)
+    frame.append(host, controls)
+    figure.append(frame)
+
+    // Double-click anywhere on the embed opens the full Excalidraw editor tab.
+    figure.addEventListener('dblclick', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      void useStore.getState().openNoteInTab(this.path)
+    })
+
+    void exportExcalidrawSvg(this.path, `${this.path}@${this.modified}`).then((preview) => {
+      if (!figure.isConnected) return
+      if (preview) {
+        frame.style.background = preview.background
+        host.innerHTML = preview.svg
+      } else {
+        status.textContent = 'Empty drawing — double-click to edit'
+      }
+    })
+
+    return figure
+  }
+
+  ignoreEvent(): boolean {
+    return true
   }
 }
 
@@ -662,6 +826,30 @@ function computeDecorations(view: EditorView): DecorationSet {
         }
         continue
       }
+      const parsedExcalidraw = parseStandaloneExcalidraw(line.text)
+      if (parsedExcalidraw) {
+        replacedLines.add(lineNo)
+        pending.push({
+          from: line.to,
+          to: line.to,
+          deco: Decoration.widget({
+            side: 1,
+            widget: new ExcalidrawEmbedWidget(
+              parsedExcalidraw.path,
+              line.from,
+              parsedExcalidraw.modified
+            )
+          })
+        })
+        if (!lineActive) {
+          pending.push({
+            from: line.from,
+            to: line.to,
+            deco: imageSourceHide
+          })
+        }
+        continue
+      }
       if (lineActive) continue
       const parsedPdf = parseStandaloneLocalPdf(line.text)
       if (parsedPdf) {
@@ -846,6 +1034,10 @@ export const livePreviewPlugin = ViewPlugin.fromClass(
           state.pinnedRefKind !== prev.pinnedRefKind ||
           state.pdfEmbedInEditMode !== prev.pdfEmbedInEditMode ||
           state.noteRefs !== prev.noteRefs ||
+          // An inline `![[drawing.excalidraw]]` static preview keys off the
+          // drawing's modified time; refresh when the notes list changes so the
+          // preview updates after the drawing is edited in its own tab.
+          state.notes !== prev.notes ||
           // Asset list arrives async after the editor mounts; without
           // this, an `![[name.png]]` whose target is at the vault root
           // (or anywhere other than the note's own directory) bakes in

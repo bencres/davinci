@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   parseCreateNotePath,
+  resolveExcalidrawEmbed,
   resolveWikilinkTarget,
   stripWikilinkAnchor,
   suggestCreateNotePath,
@@ -60,6 +61,37 @@ describe('resolveWikilinkTarget — heading/block anchors (#196)', () => {
 
   it('returns null for a bare [[#heading]] with no document', () => {
     expect(resolveWikilinkTarget(notes, '#My Heading')).toBeNull()
+  })
+})
+
+describe('resolveExcalidrawEmbed', () => {
+  const drawings = [
+    { path: 'inbox/Sketch.excalidraw', title: 'Sketch', folder: 'inbox' as const },
+    {
+      path: 'inbox/projects/Flow.excalidraw',
+      title: 'Flow',
+      folder: 'inbox' as const
+    }
+  ]
+
+  it('resolves a bare name without extension', () => {
+    expect(resolveExcalidrawEmbed(drawings, 'Sketch')?.path).toBe('inbox/Sketch.excalidraw')
+  })
+
+  it('resolves a name carrying the .excalidraw extension (strip fallback)', () => {
+    expect(resolveExcalidrawEmbed(drawings, 'Sketch.excalidraw')?.path).toBe(
+      'inbox/Sketch.excalidraw'
+    )
+  })
+
+  it('resolves a path-like target with the extension', () => {
+    expect(resolveExcalidrawEmbed(drawings, 'inbox/projects/Flow.excalidraw')?.path).toBe(
+      'inbox/projects/Flow.excalidraw'
+    )
+  })
+
+  it('returns null for an unknown drawing', () => {
+    expect(resolveExcalidrawEmbed(drawings, 'Nope.excalidraw')).toBeNull()
   })
 })
 
