@@ -11,11 +11,15 @@ import {
   DEFAULT_FLASHCARD_DENSITY,
   DEFAULT_FLASHCARD_GUIDANCE,
   DEFAULT_FLASHCARD_NEW_PER_DAY,
-  DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
+  DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY,
+  DEFAULT_FLASHCARD_STUDY_MODE,
+  DEFAULT_FLASHCARD_DUE_REMINDER_TIME,
+  DEFAULT_FLASHCARD_STREAK_REMINDER_TIME
 } from '@shared/ipc'
 import type {
   AppUpdateState,
   CliInstallStatus,
+  FlashcardStudyMode,
   RaycastExtensionStatus,
   RemoteWorkspaceProfile,
   RemoteWorkspaceProfileInput,
@@ -57,6 +61,7 @@ import {
   normalizeWeeklyNotesDirectory
 } from '../lib/vault-layout'
 import { BUILTIN_TEMPLATES } from '@shared/builtin-templates'
+import { DEFAULT_POMODORO_CONFIG } from '@shared/pomodoro'
 import { composeTemplateFile, mergeTemplates } from '@shared/template-files'
 import { TemplateEditorModal } from './TemplateEditorModal'
 import type { NoteTemplate } from '@bridge-contract/templates'
@@ -269,6 +274,17 @@ export function SettingsModal(): JSX.Element {
   const remoteWorkspaceProfiles = useStore((s) => s.remoteWorkspaceProfiles)
   const vaultSettings = useStore((s) => s.vaultSettings)
   const persistVaultSettings = useStore((s) => s.setVaultSettings)
+  const studyGamification = useStore((s) => s.studyGamification)
+  const setStudySoundEnabled = useStore((s) => s.setStudySoundEnabled)
+  const setPomodoroConfig = useStore((s) => s.setPomodoroConfig)
+  const setPomodoroNotificationsEnabled = useStore((s) => s.setPomodoroNotificationsEnabled)
+  const loadStudyGamification = useStore((s) => s.loadStudyGamification)
+  // The study settings edit the persisted gamification file; read it up front
+  // so a toggle here never starts from defaults and clobbers saved values.
+  useEffect(() => {
+    void loadStudyGamification()
+  }, [loadStudyGamification])
+  const pomodoroConfig = studyGamification?.pomodoro ?? DEFAULT_POMODORO_CONFIG
   const openVaultPicker = useStore((s) => s.openVaultPicker)
   const connectRemoteWorkspace = useStore((s) => s.connectRemoteWorkspace)
   const connectRemoteWorkspaceProfile = useStore((s) => s.connectRemoteWorkspaceProfile)
@@ -1509,6 +1525,24 @@ export function SettingsModal(): JSX.Element {
           title: 'Card density',
           description: 'How many cards to aim for per note.',
           keywords: ['density', 'count', 'how many', 'concise', 'thorough', 'study']
+        },
+        {
+          id: 'study-success-chime',
+          title: 'Success chime',
+          description: 'Play a quiet chime when you grade a card Good or Easy.',
+          keywords: ['sound', 'chime', 'audio', 'feedback', 'study', 'review', 'mute']
+        },
+        {
+          id: 'pomodoro-durations',
+          title: 'Pomodoro durations',
+          description: 'Focus, break, and long-break lengths for the focus timer.',
+          keywords: ['pomodoro', 'timer', 'focus', 'break', 'duration', 'minutes', 'interval', 'cycle']
+        },
+        {
+          id: 'pomodoro-notifications',
+          title: 'Pomodoro notifications',
+          description: 'Show an OS notification when a focus or break phase ends.',
+          keywords: ['pomodoro', 'timer', 'notification', 'alert', 'os', 'focus', 'break']
         }
       ],
       content: (
@@ -1688,6 +1722,161 @@ export function SettingsModal(): JSX.Element {
                 />
               </label>
             </div>
+          </Section>
+
+          <Section
+            title="When nothing's due"
+            description="Which session “Study anyway” starts once your review queue is empty — so you can keep a daily habit without waiting for cards to come due."
+          >
+            <div
+              className="flex items-center justify-between gap-5 px-5 py-4"
+              {...settingsSearchTargetProps('flashcard-default-mode')}
+            >
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-ink-900">Default study mode</div>
+                <div className="mt-1 text-xs leading-5 text-ink-500">
+                  Applied when nothing is scheduled. Cards still reschedule normally as you grade them.
+                </div>
+              </div>
+              <select
+                value={vaultSettings.flashcardDefaultMode ?? DEFAULT_FLASHCARD_STUDY_MODE}
+                onChange={(e) =>
+                  void persistVaultSettings({
+                    ...vaultSettings,
+                    flashcardDefaultMode: e.target.value as FlashcardStudyMode
+                  })
+                }
+                className="w-56 max-w-[50vw] rounded-xl border border-paper-300/70 bg-paper-100/80 px-3 py-2 text-sm text-ink-900 outline-none focus:border-accent/45"
+              >
+                <option value="free">Random cards (shuffle)</option>
+                <option value="weak">Weak spots (lowest accuracy)</option>
+                <option value="redo">Redo today's misses</option>
+                <option value="calibration">Calibration training</option>
+                <option value="new">New cards (learn ahead)</option>
+              </select>
+            </div>
+          </Section>
+
+          <Section
+            title="Review feedback"
+            description="Small touches that make the study loop feel responsive."
+          >
+            <ToggleRow
+              label="Success chime"
+              description="Play a quiet rising chime when you grade a card Good or Easy. Misses stay silent."
+              value={studyGamification?.soundEnabled ?? true}
+              settingId="study-success-chime"
+              onChange={(next) => void setStudySoundEnabled(next)}
+            />
+          </Section>
+
+          {zenBridge.getCapabilities().supportsStudyReminders && (
+            <Section
+              title="Reminders"
+              description="Desktop notifications while ZenNotes is running, each at most once per day at its set time. Clicking one opens the study dashboard."
+            >
+              <ToggleRow
+                label="Cards due"
+                description="Notify when review cards are waiting."
+                value={vaultSettings.flashcardDueReminderEnabled ?? false}
+                settingId="study-due-reminder"
+                onChange={(next) =>
+                  void persistVaultSettings({ ...vaultSettings, flashcardDueReminderEnabled: next })
+                }
+              />
+              <ToggleRow
+                label="Streak at risk"
+                description="Warn in the evening when you haven't reviewed yet and your streak would end at midnight."
+                value={vaultSettings.flashcardStreakReminderEnabled ?? false}
+                settingId="study-streak-reminder"
+                onChange={(next) =>
+                  void persistVaultSettings({
+                    ...vaultSettings,
+                    flashcardStreakReminderEnabled: next
+                  })
+                }
+              />
+              <div
+                className="flex flex-wrap items-end gap-6 px-5 py-5"
+                {...settingsSearchTargetProps('study-reminder-times')}
+              >
+                <label className="flex flex-col gap-1.5 text-xs font-medium text-ink-700">
+                  Cards due at
+                  <input
+                    type="time"
+                    value={vaultSettings.flashcardDueReminderTime ?? DEFAULT_FLASHCARD_DUE_REMINDER_TIME}
+                    onChange={(e) =>
+                      void persistVaultSettings({
+                        ...vaultSettings,
+                        flashcardDueReminderTime: e.target.value || DEFAULT_FLASHCARD_DUE_REMINDER_TIME
+                      })
+                    }
+                    className="w-28 rounded-xl border border-paper-300/70 bg-paper-50/75 px-3 py-2 text-sm text-ink-900 outline-none focus:border-accent/45"
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5 text-xs font-medium text-ink-700">
+                  Streak warning at
+                  <input
+                    type="time"
+                    value={
+                      vaultSettings.flashcardStreakReminderTime ?? DEFAULT_FLASHCARD_STREAK_REMINDER_TIME
+                    }
+                    onChange={(e) =>
+                      void persistVaultSettings({
+                        ...vaultSettings,
+                        flashcardStreakReminderTime:
+                          e.target.value || DEFAULT_FLASHCARD_STREAK_REMINDER_TIME
+                      })
+                    }
+                    className="w-28 rounded-xl border border-paper-300/70 bg-paper-50/75 px-3 py-2 text-sm text-ink-900 outline-none focus:border-accent/45"
+                  />
+                </label>
+              </div>
+            </Section>
+          )}
+
+          <Section
+            title="Pomodoro focus timer"
+            description="Durations for the focus timer (command palette, Space g p, or the dashboard). Changes apply from the next timer you start."
+          >
+            <div
+              className="flex flex-wrap items-end gap-6 px-5 py-5"
+              {...settingsSearchTargetProps('pomodoro-durations')}
+            >
+              {(
+                [
+                  { key: 'focusMinutes', label: 'Focus (min)' },
+                  { key: 'breakMinutes', label: 'Break (min)' },
+                  { key: 'longBreakMinutes', label: 'Long break (min)' },
+                  { key: 'longBreakEvery', label: 'Long break every' }
+                ] as const
+              ).map(({ key, label }) => (
+                <label key={key} className="flex flex-col gap-1.5 text-xs font-medium text-ink-700">
+                  {label}
+                  <input
+                    type="number"
+                    min={1}
+                    max={key === 'longBreakEvery' ? 12 : 240}
+                    value={pomodoroConfig[key]}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      void setPomodoroConfig({
+                        ...pomodoroConfig,
+                        [key]: Number.isFinite(n) ? n : DEFAULT_POMODORO_CONFIG[key]
+                      })
+                    }}
+                    className="w-28 rounded-xl border border-paper-300/70 bg-paper-50/75 px-3 py-2 text-sm text-ink-900 outline-none focus:border-accent/45"
+                  />
+                </label>
+              ))}
+            </div>
+            <ToggleRow
+              label="Phase notifications"
+              description="Show an OS notification when a focus or break phase ends while ZenNotes is in the background."
+              value={studyGamification?.pomodoroNotificationsEnabled ?? true}
+              settingId="pomodoro-notifications"
+              onChange={(next) => void setPomodoroNotificationsEnabled(next)}
+            />
           </Section>
         </div>
       )

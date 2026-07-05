@@ -48,19 +48,51 @@ import {
   type Flashcard,
   type FlashcardDeck,
   type FlashcardDraft,
+  type FlashcardKind,
   type FsrsRating,
   type GradedCriterion,
   type ReviewGrade,
   type ReviewLogFile
 } from '@shared/flashcards'
-import { selectDueQueue, shapeSession, type CardIndex } from '@shared/srs'
-import { buildConceptGraph, type ConceptGraph } from '@shared/concept-graph'
+import {
+  selectDueQueue,
+  selectFreeQueue,
+  selectNewQueue,
+  shapeSession,
+  type CardIndex
+} from '@shared/srs'
+import {
+  rankWeakCards,
+  selectMiscalibratedCards,
+  selectRecentMisses
+} from '@shared/study-modes'
+import {
+  buildConceptGraph,
+  conceptKey,
+  prerequisiteChain,
+  type ConceptGraph
+} from '@shared/concept-graph'
 import {
   computeStudyStats,
   DEFAULT_STUDY_GAMIFICATION,
+  findStaleDecks,
+  type StaleDeck,
   type StudyGamification,
   type StudyStats
 } from '@shared/study-stats'
+import {
+  advancePomodoro,
+  DEFAULT_POMODORO_CONFIG,
+  normalizePomodoroConfig,
+  pausePomodoro,
+  resumePomodoro,
+  revivePomodoroState,
+  skipPomodoroPhase,
+  startPomodoro,
+  type PomodoroConfig,
+  type PomodoroState
+} from '@shared/pomodoro'
+import { requestPomodoroNotificationPermission } from './lib/pomodoro-notify'
 import { schedule } from './lib/srs-scheduler'
 import { backlinksForNote, resolveWikilinkTarget } from './lib/wikilinks'
 import {
@@ -70,7 +102,7 @@ import {
   DEFAULT_FLASHCARD_NEW_PER_DAY,
   DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
 } from '@shared/ipc'
-import type { FlashcardDensity } from '@shared/ipc'
+import type { FlashcardDensity, VaultTextSearchMatch } from '@shared/ipc'
 import type { FlashcardCardMix } from '@zennotes/bridge-contract/bridge'
 import { parseFrontmatter } from '@shared/template-files'
 import { recordTitle, composePageBody } from './lib/database-cells'
@@ -810,6 +842,51 @@ function savePrefs(p: Prefs): void {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * Running pomodoro timer, persisted per-device like the prefs so a restart
+ * resumes it. Timestamp-based state makes this safe: a paused timer comes back
+ * paused, a live one keeps its deadline, and one that expired while the app
+ * was closed is dropped by `revivePomodoroState`.
+ */
+const POMODORO_KEY = 'zen:pomodoro:v1'
+function loadPersistedPomodoro(): PomodoroState | null {
+  try {
+    const raw = localStorage.getItem(POMODORO_KEY)
+    return raw ? revivePomodoroState(JSON.parse(raw), Date.now()) : null
+  } catch {
+    return null
+  }
+}
+function persistPomodoro(state: PomodoroState | null): void {
+  try {
+    if (state) localStorage.setItem(POMODORO_KEY, JSON.stringify(state))
+    else localStorage.removeItem(POMODORO_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Serialize gamification writes. Rapid successive edits (typing "50" into a
+ * settings field fires one write per keystroke) would otherwise race: IPC
+ * responses can resolve out of order and a stale write can land on disk last.
+ * Each queued write snapshots the latest in-memory value at execution time, so
+ * collapsed edits persist correctly and the final write always wins.
+ */
+let studyGamificationWriteChain: Promise<void> = Promise.resolve()
+function queueStudyGamificationWrite(latest: () => StudyGamification | null): Promise<void> {
+  studyGamificationWriteChain = studyGamificationWriteChain.then(async () => {
+    const current = latest()
+    if (!current) return
+    try {
+      await window.zen.writeStudyGamification(current)
+    } catch (err) {
+      console.error('writeStudyGamification failed', err)
+    }
+  })
+  return studyGamificationWriteChain
 }
 
 function replaceNoteMeta(notes: NoteMeta[], oldPath: string, next: NoteMeta): NoteMeta[] {
@@ -1691,6 +1768,42 @@ export type StudyScope =
  */
 export type StudyPhase = 'idle' | 'loading' | 'front' | 'revealed' | 'summary'
 
+/**
+ * The card-picking strategy for a session, layered on top of its `scope`:
+ * - `'due'` — spaced-repetition default (scheduled/new cards, daily caps applied)
+ * - `'free'` — ignore due dates: a deck, concept, or random subset of the vault
+ * - `'weak'` — cards with the lowest review accuracy (struggle list)
+ * - `'redo'` — cards graded again/hard recently (today's misses)
+ * - `'calibration'` — cards where the predicted rating diverged from the actual
+ * - `'new'` — never-scheduled cards only, ignoring the daily new cap
+ *
+ * Orthogonal modifiers (`cardKind`, `includePrerequisites`, `timeBoxMs`,
+ * `masteryLoop`, `limit`) compose on top of any mode — see `StudySessionOptions`.
+ */
+export type StudyMode = 'due' | 'free' | 'weak' | 'redo' | 'calibration' | 'new'
+
+/** Options controlling how `startStudySession` builds and runs its queue. */
+export interface StudySessionOptions {
+  /** Card-picking strategy (default `'due'`). */
+  mode?: StudyMode
+  /** Cap the queue length (a subset of the scope). */
+  limit?: number
+  /** Restrict to one card kind (recall drill vs. synthesis deep-work). */
+  cardKind?: FlashcardKind
+  /** Concept scope only: include the concept's prerequisites, foundational-first. */
+  includePrerequisites?: boolean
+  /** Stop condition: end the session after this much elapsed time (ms). */
+  timeBoxMs?: number
+  /** Re-queue any card not graded good/easy until the whole scope is mastered. */
+  masteryLoop?: boolean
+}
+
+/** Default size of a "random cards" free-study session over the whole vault. */
+export const FREE_STUDY_DEFAULT_LIMIT = 20
+
+/** Default length of a time-boxed quick session (10 minutes). */
+export const STUDY_TIME_BOX_DEFAULT_MS = 10 * 60 * 1000
+
 interface Store {
   vault: VaultInfo | null
   workspaceMode: WorkspaceMode
@@ -1987,6 +2100,16 @@ interface Store {
    * batch for hand-authored cards.
    */
   openFlashcardReview: (notePath: string, mode?: FlashcardReviewMode) => Promise<void>
+  /**
+   * Close an "orphan prerequisite" gap: find the vault note that best covers
+   * `concept` (text search, most matches wins) and open the custom generation
+   * form on it with instructions prefilled to teach that concept. Returns
+   * `'no-notes'` when nothing in the vault mentions the concept — the caller
+   * offers to create a stub note instead (see `createNoteForConcept`).
+   */
+  generateCardsForConcept: (concept: string) => Promise<'opened' | 'no-notes'>
+  /** Create (and open) a stub note titled after a concept, to be written then card-generated. */
+  createNoteForConcept: (concept: string) => Promise<void>
   /** Patch the active per-generation options (custom form). */
   setFlashcardGenOption: (patch: Partial<FlashcardGenOptions>) => void
   /** Run Claude generation for the review note; sets status/draft state. */
@@ -2019,12 +2142,22 @@ interface Store {
   /** Grades recorded this session (for the summary; persisted in Phase 2b). */
   studySessionGrades: ReviewGrade[]
   studyError: string | null
+  /** How the open session picked its cards (for re-offering the same mode). */
+  studyMode: StudyMode
+  /** Epoch ms the current session started (for the time-box stop condition). */
+  studySessionStartedAt: number | null
+  /** Time-box: end the session this many ms after it started (null = no limit). */
+  studyTimeBoxMs: number | null
+  /** Mastery loop: re-queue any card not graded good/easy until all are mastered. */
+  studyMasteryLoop: boolean
   /**
-   * Build the due queue for `scope`, open the study tab, and start reviewing.
-   * Global (`{kind:'all'}`) draws due cards across every deck; per-note draws
-   * from one deck.
+   * Build the queue for `scope`, open the study tab, and start reviewing.
+   * Global (`{kind:'all'}`) draws across every deck; per-note draws from one
+   * deck. `opts.mode` picks the strategy (due / free / weak / redo / calibration
+   * / new); `cardKind`, `includePrerequisites`, `timeBoxMs`, `masteryLoop`, and
+   * `limit` are orthogonal modifiers that compose on top.
    */
-  startStudySession: (scope: StudyScope) => Promise<void>
+  startStudySession: (scope: StudyScope, opts?: StudySessionOptions) => Promise<void>
   /** Capture the pre-reveal predicted rating for the current card. */
   setStudyPredicted: (rating: FsrsRating) => void
   /** Move the current card from `front` to `revealed`. */
@@ -2042,6 +2175,8 @@ interface Store {
   studyStats: StudyStats | null
   /** Persisted gamification config (editable daily goal + streak bookkeeping). */
   studyGamification: StudyGamification | null
+  /** Decks whose source note was edited after the cards were authored. */
+  staleDecks: StaleDeck[]
   studyStatsLoading: boolean
   studyStatsError: string | null
   /** Open (or focus) the dashboard tab and load its stats. */
@@ -2050,6 +2185,31 @@ interface Store {
   loadStudyStats: () => Promise<void>
   /** Persist a new daily-goal target and recompute stats. */
   setStudyDailyGoal: (goal: number) => Promise<void>
+  /** Persist the study success-chime toggle (on by default). */
+  setStudySoundEnabled: (enabled: boolean) => Promise<void>
+
+  // --- Pomodoro focus timer (bottom-right overlay) ---
+  /** Running timer state, or null when no pomodoro is active. Persisted per-device. */
+  pomodoro: PomodoroState | null
+  /** Overlay collapsed to the compact clock pill. */
+  pomodoroMinimized: boolean
+  /** Start a focus phase with the configured durations; show the overlay expanded. */
+  startPomodoroTimer: () => Promise<void>
+  /**
+   * Roll the timer forward to now; returns true when a phase boundary was
+   * crossed (so the overlay can chime / notify). No-op when idle or paused.
+   */
+  tickPomodoroTimer: () => boolean
+  togglePomodoroPause: () => void
+  skipPomodoroPhase: () => void
+  stopPomodoroTimer: () => void
+  setPomodoroMinimized: (minimized: boolean) => void
+  /** Persist new pomodoro durations (applies from the next started timer). */
+  setPomodoroConfig: (config: PomodoroConfig) => Promise<void>
+  /** Persist the phase-end OS-notification toggle (on by default). */
+  setPomodoroNotificationsEnabled: (enabled: boolean) => Promise<void>
+  /** Read the persisted gamification config if it isn't in memory yet. */
+  loadStudyGamification: () => Promise<void>
 
   // --- Concept (knowledge) graph ---
   /** Concept dependency graph (nodes/edges/gaps), null until loaded. */
@@ -3379,10 +3539,17 @@ export const useStore = create<Store>((set, get) => {
   studyPredicted: null,
   studySessionGrades: [],
   studyError: null,
+  studyMode: 'due',
+  studySessionStartedAt: null,
+  studyTimeBoxMs: null,
+  studyMasteryLoop: false,
   studyStats: null,
   studyGamification: null,
+  staleDecks: [],
   studyStatsLoading: false,
   studyStatsError: null,
+  pomodoro: loadPersistedPomodoro(),
+  pomodoroMinimized: false,
   conceptGraph: null,
   conceptGraphLoading: false,
   conceptGraphError: null,
@@ -3826,6 +3993,45 @@ export const useStore = create<Store>((set, get) => {
     }
   },
 
+  generateCardsForConcept: async (concept) => {
+    const label = concept.trim()
+    if (!label) return 'no-notes'
+    let matches: VaultTextSearchMatch[] = []
+    try {
+      matches = await window.zen.searchVaultText(label)
+    } catch (err) {
+      console.error('generateCardsForConcept search failed', err)
+    }
+    // Rank candidate notes by how often they mention the concept; break ties
+    // toward the more recently edited note (fresher coverage of the idea).
+    const countByPath = new Map<string, number>()
+    for (const m of matches) {
+      if (!m.path.toLowerCase().endsWith('.md')) continue
+      countByPath.set(m.path, (countByPath.get(m.path) ?? 0) + 1)
+    }
+    if (countByPath.size === 0) return 'no-notes'
+    const updatedAtByPath = new Map(get().notes.map((n) => [n.path, n.updatedAt]))
+    const best = [...countByPath.entries()].sort(
+      (a, b) =>
+        b[1] - a[1] ||
+        (updatedAtByPath.get(b[0]) ?? 0) - (updatedAtByPath.get(a[0]) ?? 0) ||
+        (a[0] < b[0] ? -1 : 1)
+    )[0][0]
+    // Custom mode shows the config form (no auto-generation), so the learner can
+    // adjust before running; the prefilled instructions carry the concept focus.
+    await get().openFlashcardReview(best, 'custom')
+    get().setFlashcardGenOption({
+      instructions: `Focus specifically on the concept "${label}" — it is currently an untaught prerequisite of other cards. Generate cards that teach it directly.`
+    })
+    return 'opened'
+  },
+
+  createNoteForConcept: async (concept) => {
+    const label = concept.trim()
+    if (!label) return
+    await get().createAndOpen('inbox', '', { title: label })
+  },
+
   setFlashcardGenOption: (patch) => {
     set((s) => ({ flashcardGenOptions: { ...s.flashcardGenOptions, ...patch } }))
   },
@@ -4013,7 +4219,9 @@ export const useStore = create<Store>((set, get) => {
       // Edit mode REPLACES the deck with the kept set (so discarded cards are
       // removed); generation/manual modes APPEND to whatever is already saved.
       const cards = editingDeck ? accepted : [...base.cards, ...accepted]
-      const merged: FlashcardDeck = { ...base, cards }
+      // A review-surface save is a human vouching for the deck against the note
+      // as it is NOW — stamp it (grading writes preserve, never set, this).
+      const merged: FlashcardDeck = { ...base, cards, authoredAt: Date.now() }
       const saved = await window.zen.writeFlashcards(notePath, merged)
       set((s) => ({
         flashcardDeckByNote: { ...s.flashcardDeckByNote, [notePath]: saved },
@@ -4046,10 +4254,15 @@ export const useStore = create<Store>((set, get) => {
     }
   },
 
-  startStudySession: async (scope) => {
+  startStudySession: async (scope, opts) => {
+    const mode: StudyMode = opts?.mode ?? 'due'
     const tabPath = scope.kind === 'note' ? studyTabPath(scope.notePath) : STUDY_TAB_PATH
     set({
       studyScope: scope,
+      studyMode: mode,
+      studyTimeBoxMs: opts?.timeBoxMs ?? null,
+      studyMasteryLoop: opts?.masteryLoop ?? false,
+      studySessionStartedAt: null,
       studyPhase: 'loading',
       studyIndex: null,
       studyQueue: [],
@@ -4085,54 +4298,106 @@ export const useStore = create<Store>((set, get) => {
           }
         }
       }
+
+      // Review logs back the daily caps AND the history-driven modes (weak / redo
+      // / calibration) and the prerequisite graph. Load once for the in-scope
+      // notes; a missing/corrupt log just means no recorded history for that note.
+      const logs: ReviewLogFile[] = []
+      for (const p of Array.from(new Set(decks.map((d) => d.sourceNotePath)))) {
+        try {
+          const log = await window.zen.readReviewLog(p)
+          if (log) logs.push(log)
+        } catch {
+          // ignore — treat as no history
+        }
+      }
+
       let index = buildCardIndex(decks)
-      // Concept scope: keep only cards tagged with the concept (case-insensitive).
+      // Concept scope: keep cards tagged with the concept (case-insensitive). With
+      // `includePrerequisites`, widen to the concept's prerequisites too, and
+      // remember each concept's depth so the queue can run foundational-first.
+      let depthByKey: Map<string, number> | null = null
       if (scope.kind === 'concept') {
-        const key = scope.concept.trim().toLowerCase()
+        let keys = new Set([conceptKey(scope.concept)])
+        if (opts?.includePrerequisites) {
+          const graph = buildConceptGraph(decks, logs)
+          keys = new Set(prerequisiteChain(graph, scope.concept))
+          depthByKey = new Map(graph.nodes.map((n) => [n.key, n.depth]))
+        }
         index = Object.fromEntries(
           Object.entries(index).filter(([, e]) =>
-            e.card.concepts.some((c) => c.trim().toLowerCase() === key)
+            e.card.concepts.some((c) => keys.has(conceptKey(c)))
           )
         )
       }
-      // Apply per-day new/review caps (Anki-style). "Done today" comes from each
-      // deck's review log — only read those when a finite cap is actually set.
-      const vs = get().vaultSettings
-      const newPerDay = vs.flashcardNewPerDay ?? DEFAULT_FLASHCARD_NEW_PER_DAY
-      const maxReviewsPerDay = vs.flashcardMaxReviewsPerDay ?? DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
-      const now = new Date()
-      let newDoneToday = 0
-      let reviewsDoneToday = 0
-      if (Number.isFinite(newPerDay) || Number.isFinite(maxReviewsPerDay)) {
-        const notePaths = Array.from(new Set(decks.map((d) => d.sourceNotePath)))
-        const logs: ReviewLogFile[] = []
-        for (const p of notePaths) {
-          try {
-            const log = await window.zen.readReviewLog(p)
-            if (log) logs.push(log)
-          } catch {
-            // a missing/corrupt log just means no progress recorded for that note
-          }
-        }
-        const progress = countDailyProgress(logs, now)
-        newDoneToday = progress.newDoneToday
-        reviewsDoneToday = progress.reviewsDoneToday
+      // Orthogonal kind filter: a pure recall drill or synthesis deep-work pass.
+      if (opts?.cardKind) {
+        const kind = opts.cardKind
+        index = Object.fromEntries(Object.entries(index).filter(([, e]) => e.card.kind === kind))
       }
-      const dueQueue = selectDueQueue(index, {
-        now,
-        newPerDay,
-        maxReviewsPerDay,
-        newDoneToday,
-        reviewsDoneToday
-      })
-      // Shape into a session: easy warm-up, interleaved middle, easy cool-down.
-      const queue = shapeSession(dueQueue, index)
+
+      const now = new Date()
+      // Pick the base queue by mode. `due` applies the Anki-style caps; the rest
+      // ignore scheduling (grading still reschedules cards exactly the same way).
+      let baseQueue: string[]
+      switch (mode) {
+        case 'free':
+          baseQueue = selectFreeQueue(index, { shuffle: true, limit: opts?.limit })
+          break
+        case 'new':
+          baseQueue = selectNewQueue(index, { limit: opts?.limit })
+          break
+        case 'weak':
+          baseQueue = rankWeakCards(index, logs, { limit: opts?.limit })
+          break
+        case 'redo':
+          baseQueue = selectRecentMisses(index, logs, { now, limit: opts?.limit })
+          break
+        case 'calibration':
+          baseQueue = selectMiscalibratedCards(index, logs, { limit: opts?.limit })
+          break
+        default: {
+          const vs = get().vaultSettings
+          const newPerDay = vs.flashcardNewPerDay ?? DEFAULT_FLASHCARD_NEW_PER_DAY
+          const maxReviewsPerDay = vs.flashcardMaxReviewsPerDay ?? DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
+          const progress = countDailyProgress(logs, now)
+          baseQueue = selectDueQueue(index, {
+            now,
+            newPerDay,
+            maxReviewsPerDay,
+            newDoneToday: progress.newDoneToday,
+            reviewsDoneToday: progress.reviewsDoneToday
+          })
+        }
+      }
+
+      // Ordering: a prerequisite path runs foundational-first (by concept depth);
+      // due/free get the warm-up/interleave/cool-down shaping; the ranked modes
+      // (weak/redo/calibration/new) keep their deliberate order as-is.
+      let queue: string[]
+      if (depthByKey) {
+        const depths = depthByKey
+        const focusDepth = (id: string): number => {
+          const focus = index[id]?.card.concepts[0]
+          return focus ? depths.get(conceptKey(focus)) ?? Number.POSITIVE_INFINITY : Number.POSITIVE_INFINITY
+        }
+        queue = baseQueue
+          .map((id, i) => ({ id, i, d: focusDepth(id) }))
+          .sort((a, b) => a.d - b.d || a.i - b.i)
+          .map((x) => x.id)
+      } else if (mode === 'due' || mode === 'free') {
+        queue = shapeSession(baseQueue, index)
+      } else {
+        queue = baseQueue
+      }
+
       set({
         flashcardDeckByNote: cache,
         studyIndex: index,
         studyQueue: queue,
         studyCursor: 0,
         studyPredicted: null,
+        studySessionStartedAt: queue.length === 0 ? null : Date.now(),
         studyPhase: queue.length === 0 ? 'summary' : 'front'
       })
     } catch (err) {
@@ -4167,8 +4432,52 @@ export const useStore = create<Store>((set, get) => {
     const updatedCard: Flashcard = { ...entry.card, srs }
     const notePath = entry.sourceNotePath
 
-    // Persist the new SRS state immediately (rewrite the note's deck file). The
-    // append-only review log is added in Phase 2b.
+    const grade: ReviewGrade = {
+      cardId,
+      reviewedAt: now.toISOString(),
+      // Only record a prediction the learner actually made — a defaulted value
+      // would read as perfectly calibrated and pollute the calibration stats.
+      ...(s.studyPredicted ? { predictedRating: s.studyPredicted } : {}),
+      rating,
+      ...(detail?.learnerAnswer ? { learnerAnswer: detail.learnerAnswer } : {}),
+      ...(detail?.criteria ? { criteria: detail.criteria } : {}),
+      ...(detail?.score != null ? { score: detail.score } : {})
+    }
+
+    // Advance the session state OPTIMISTICALLY — before any awaited disk write —
+    // so the loop (card advance, phase, in-session progress) reacts instantly and
+    // the renderer's reveal/grade feedback never waits on file I/O. The persistence
+    // below continues in the background and is best-effort.
+    set((st) => {
+      // Keep the in-memory index current so later passes/counts see the new SRS.
+      const nextIndex: CardIndex = {
+        ...st.studyIndex,
+        [cardId]: { ...entry, card: updatedCard }
+      }
+      // Re-queue a card so it comes back before the session ends: always for an
+      // `again`, and in a mastery loop for anything short of good/easy.
+      const requeue =
+        rating === 'again' || (st.studyMasteryLoop && rating !== 'good' && rating !== 'easy')
+      const queue = requeue ? [...st.studyQueue, cardId] : st.studyQueue
+      const cursor = st.studyCursor + 1
+      // End on an exhausted queue, or once the time-box has elapsed (even mid-queue).
+      const timedOut =
+        st.studyTimeBoxMs != null &&
+        st.studySessionStartedAt != null &&
+        Date.now() - st.studySessionStartedAt >= st.studyTimeBoxMs
+      return {
+        studyIndex: nextIndex,
+        studyQueue: queue,
+        studyCursor: cursor,
+        studyPredicted: null,
+        studySessionGrades: [...st.studySessionGrades, grade],
+        studyPhase: cursor >= queue.length || timedOut ? 'summary' : 'front'
+      }
+    })
+
+    // Persist the new SRS state (rewrite the note's deck file), then append to the
+    // append-only review log. Both are best-effort; the in-session summary does not
+    // depend on either write succeeding.
     try {
       const deck =
         get().flashcardDeckByNote[notePath] ?? (await window.zen.readFlashcards(notePath))
@@ -4182,41 +4491,12 @@ export const useStore = create<Store>((set, get) => {
       console.error('gradeCurrentCard persist failed', err)
     }
 
-    const grade: ReviewGrade = {
-      cardId,
-      reviewedAt: now.toISOString(),
-      predictedRating: get().studyPredicted ?? rating,
-      rating,
-      ...(detail?.learnerAnswer ? { learnerAnswer: detail.learnerAnswer } : {}),
-      ...(detail?.criteria ? { criteria: detail.criteria } : {}),
-      ...(detail?.score != null ? { score: detail.score } : {})
-    }
-    // Append to the per-note review log (best-effort; the in-session summary
-    // does not depend on this write succeeding).
     try {
       await window.zen.appendReviewGrade(notePath, grade)
     } catch (err) {
       console.error('appendReviewGrade failed', err)
     }
 
-    set((st) => {
-      // Keep the in-memory index current so later passes/counts see the new SRS.
-      const nextIndex: CardIndex = {
-        ...st.studyIndex,
-        [cardId]: { ...entry, card: updatedCard }
-      }
-      // Re-queue an `again` card so it comes back before the session ends.
-      const queue = rating === 'again' ? [...st.studyQueue, cardId] : st.studyQueue
-      const cursor = st.studyCursor + 1
-      return {
-        studyIndex: nextIndex,
-        studyQueue: queue,
-        studyCursor: cursor,
-        studyPredicted: null,
-        studySessionGrades: [...st.studySessionGrades, grade],
-        studyPhase: cursor >= queue.length ? 'summary' : 'front'
-      }
-    })
     // Live-update the dashboard (streak/goal/heatmap) when it's open behind the session.
     if (allLeaves(get().paneLayout).some((l) => l.tabs.includes(STUDY_DASHBOARD_TAB_PATH))) {
       void get().loadStudyStats()
@@ -4238,7 +4518,11 @@ export const useStore = create<Store>((set, get) => {
       studyPhase: 'idle',
       studyPredicted: null,
       studySessionGrades: [],
-      studyError: null
+      studyError: null,
+      studyMode: 'due',
+      studySessionStartedAt: null,
+      studyTimeBoxMs: null,
+      studyMasteryLoop: false
     })
     // Studying changes the numbers the dashboard shows; refresh it if it's open.
     if (allLeaves(get().paneLayout).some((l) => l.tabs.includes(STUDY_DASHBOARD_TAB_PATH))) {
@@ -4279,10 +4563,15 @@ export const useStore = create<Store>((set, get) => {
       }
       const gamification = get().studyGamification ?? (await window.zen.readStudyGamification())
       const stats = computeStudyStats(decks, logs, gamification, new Date())
+      // Staleness: compare each deck against its note's last edit (notes list
+      // metadata the store already holds).
+      const updatedAtByPath = new Map(get().notes.map((n) => [n.path, n.updatedAt]))
+      const staleDecks = findStaleDecks(decks, (p) => updatedAtByPath.get(p))
       set({
         flashcardDeckByNote: cache,
         studyGamification: gamification,
         studyStats: stats,
+        staleDecks,
         studyStatsLoading: false
       })
     } catch (err) {
@@ -4297,8 +4586,7 @@ export const useStore = create<Store>((set, get) => {
   setStudyDailyGoal: async (goal) => {
     const next = Math.max(1, Math.round(goal))
     const base = get().studyGamification ?? DEFAULT_STUDY_GAMIFICATION
-    const optimistic: StudyGamification = { ...base, dailyGoal: next }
-    set({ studyGamification: optimistic })
+    set({ studyGamification: { ...base, dailyGoal: next } })
     // Recompute immediately so the ring reacts without waiting on the write.
     if (get().studyStats) {
       set({
@@ -4309,11 +4597,84 @@ export const useStore = create<Store>((set, get) => {
         }
       })
     }
+    await queueStudyGamificationWrite(() => get().studyGamification)
+  },
+
+  setStudySoundEnabled: async (enabled) => {
+    const base = get().studyGamification ?? DEFAULT_STUDY_GAMIFICATION
+    set({ studyGamification: { ...base, soundEnabled: enabled } })
+    await queueStudyGamificationWrite(() => get().studyGamification)
+  },
+
+  startPomodoroTimer: async () => {
+    // Synchronously, inside the triggering click/keypress: browsers only allow
+    // the notification-permission prompt within a user gesture.
+    if ((get().studyGamification ?? DEFAULT_STUDY_GAMIFICATION).pomodoroNotificationsEnabled) {
+      requestPomodoroNotificationPermission()
+    }
+    await get().loadStudyGamification()
+    const config = get().studyGamification?.pomodoro ?? DEFAULT_POMODORO_CONFIG
+    const next = startPomodoro(Date.now(), config)
+    set({ pomodoro: next, pomodoroMinimized: false })
+    persistPomodoro(next)
+  },
+
+  tickPomodoroTimer: () => {
+    const current = get().pomodoro
+    if (!current) return false
+    const { state, transitioned } = advancePomodoro(current, Date.now())
+    if (transitioned) {
+      set({ pomodoro: state })
+      persistPomodoro(state)
+    }
+    return transitioned
+  },
+
+  togglePomodoroPause: () => {
+    const current = get().pomodoro
+    if (!current) return
+    const now = Date.now()
+    const next = current.pausedAt === null ? pausePomodoro(current, now) : resumePomodoro(current, now)
+    set({ pomodoro: next })
+    persistPomodoro(next)
+  },
+
+  skipPomodoroPhase: () => {
+    const current = get().pomodoro
+    if (!current) return
+    const next = skipPomodoroPhase(current, Date.now())
+    set({ pomodoro: next })
+    persistPomodoro(next)
+  },
+
+  stopPomodoroTimer: () => {
+    set({ pomodoro: null, pomodoroMinimized: false })
+    persistPomodoro(null)
+  },
+
+  setPomodoroMinimized: (minimized) => {
+    set({ pomodoroMinimized: minimized })
+  },
+
+  setPomodoroConfig: async (config) => {
+    const base = get().studyGamification ?? DEFAULT_STUDY_GAMIFICATION
+    set({ studyGamification: { ...base, pomodoro: normalizePomodoroConfig(config) } })
+    await queueStudyGamificationWrite(() => get().studyGamification)
+  },
+
+  setPomodoroNotificationsEnabled: async (enabled) => {
+    if (enabled) requestPomodoroNotificationPermission()
+    const base = get().studyGamification ?? DEFAULT_STUDY_GAMIFICATION
+    set({ studyGamification: { ...base, pomodoroNotificationsEnabled: enabled } })
+    await queueStudyGamificationWrite(() => get().studyGamification)
+  },
+
+  loadStudyGamification: async () => {
+    if (get().studyGamification) return
     try {
-      const saved = await window.zen.writeStudyGamification(optimistic)
-      set({ studyGamification: saved })
+      set({ studyGamification: await window.zen.readStudyGamification() })
     } catch (err) {
-      console.error('setStudyDailyGoal failed', err)
+      console.error('loadStudyGamification failed', err)
     }
   },
 

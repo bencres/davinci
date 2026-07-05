@@ -5,6 +5,7 @@ import {
   checkRecallAnswer,
   countDailyProgress,
   countReviewsOnDay,
+  deckAuthoredAt,
   deckPathForNote,
   difficultyLabel,
   findSourceQuoteOffset,
@@ -12,11 +13,13 @@ import {
   emptyDeck,
   flashcardsTabPath,
   flashcardsTitleFromTab,
+  isDeckStale,
   isFlashcardInternalPath,
   isFlashcardLogPath,
   isFlashcardsTabPath,
   isStudyTabPath,
   logPathForNote,
+  matchRecallAnswer,
   notePathFromDeckPath,
   notePathFromFlashcardsTab,
   notePathFromStudyTab,
@@ -24,6 +27,7 @@ import {
   relocateDeckPath,
   relocateLogPath,
   scoreRubric,
+  recallMatchToRating,
   scoreToRating,
   STUDY_TAB_PATH,
   studyTabPath,
@@ -331,5 +335,79 @@ describe('grading helpers', () => {
     expect(checkRecallAnswer('alt', 'the answer', ['ALT'])).toBe(true)
     expect(checkRecallAnswer('nope', 'the answer', ['alt'])).toBe(false)
     expect(checkRecallAnswer('   ', 'the answer')).toBe(false)
+    // Strict boolean stays exact-only: a near-miss is not a full match.
+    expect(checkRecallAnswer('mitochondira', 'mitochondria')).toBe(false)
+  })
+})
+
+describe('deck staleness helpers', () => {
+  const cardAt = (createdAt: number): ReturnType<typeof draftToCard> =>
+    draftToCard(
+      {
+        kind: 'recall',
+        subtype: 'cued',
+        front: 'Q',
+        back: 'A',
+        concepts: ['X'],
+        prerequisites: [],
+        difficulty: 2
+      },
+      'test',
+      { now: createdAt, genId: () => `id-${createdAt}` }
+    )
+
+  it('deckAuthoredAt prefers the explicit field, falling back to the newest card', () => {
+    const deck = { ...emptyDeck('a.md'), cards: [cardAt(100), cardAt(300), cardAt(200)] }
+    expect(deckAuthoredAt(deck)).toBe(300) // legacy deck → newest card
+    expect(deckAuthoredAt({ ...deck, authoredAt: 500 })).toBe(500)
+    expect(deckAuthoredAt(emptyDeck('a.md'))).toBe(0) // no signal at all
+  })
+
+  it('isDeckStale is true only when the note outran the deck', () => {
+    const deck = { ...emptyDeck('a.md'), cards: [cardAt(100)], authoredAt: 200 }
+    expect(isDeckStale(deck, 300)).toBe(true)
+    expect(isDeckStale(deck, 200)).toBe(false)
+    expect(isDeckStale(deck, 150)).toBe(false)
+    expect(isDeckStale(deck, NaN)).toBe(false)
+  })
+})
+
+describe('matchRecallAnswer', () => {
+  it('grades normalized equality as exact', () => {
+    expect(matchRecallAnswer('  The   ANSWER ', 'the answer')).toBe('exact')
+    expect(matchRecallAnswer('alt', 'the answer', ['ALT'])).toBe('exact')
+  })
+
+  it('tolerates honest typos as close', () => {
+    expect(matchRecallAnswer('mitochondira', 'mitochondria')).toBe('close') // transposition
+    expect(matchRecallAnswer('photosynthesys', 'photosynthesis')).toBe('close')
+    expect(matchRecallAnswer('recursions', 'recursion')).toBe('close') // trailing s
+  })
+
+  it('keeps short answers strict', () => {
+    // ≤2-char candidates never fuzz; 3-char ones allow a single edit.
+    expect(matchRecallAnswer('pi', 'pj')).toBe('miss')
+    expect(matchRecallAnswer('cat', 'car')).toBe('close')
+    expect(matchRecallAnswer('dog', 'car')).toBe('miss')
+  })
+
+  it('accepts multi-word answers when every answer word was typed', () => {
+    expect(matchRecallAnswer('the krebs cycle', 'krebs cycle')).toBe('close')
+    expect(matchRecallAnswer('cycle', 'krebs cycle')).toBe('miss') // missing a word
+  })
+
+  it('keeps unrelated strings a miss', () => {
+    expect(matchRecallAnswer('completely different', 'the actual answer')).toBe('miss')
+    expect(matchRecallAnswer('', 'anything')).toBe('miss')
+  })
+
+  it('fuzzes acceptableAnswers too', () => {
+    expect(matchRecallAnswer('big-oh notation', 'asymptotic complexity', ['big-o notation'])).toBe('close')
+  })
+
+  it('recallMatchToRating maps tiers to suggestions (never easy)', () => {
+    expect(recallMatchToRating('exact')).toBe('good')
+    expect(recallMatchToRating('close')).toBe('hard')
+    expect(recallMatchToRating('miss')).toBe('again')
   })
 })

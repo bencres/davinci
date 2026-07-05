@@ -7,6 +7,7 @@ import { TitleBar } from './components/TitleBar'
 import { PromptHost } from './components/PromptHost'
 import { ConfirmHost } from './components/ConfirmHost'
 import { ServerDirectoryPickerHost } from './components/ServerDirectoryPickerHost'
+import { PomodoroOverlay } from './components/PomodoroOverlay'
 import { resolveQuickNoteTitle } from './lib/quick-note-title'
 import { matchesShortcut, matchesSequenceToken } from './lib/keymaps'
 import { focusPaneOrEdgePanel } from './lib/pane-nav'
@@ -180,6 +181,15 @@ function EditorLoadingFallback(): JSX.Element {
   return <div className="min-w-0 flex-1 bg-paper-100" aria-label="Loading editor" />
 }
 
+/** Bottom-right corner stack shared by the floating overlays (pomodoro, update notice). */
+function CornerOverlays({ children }: { children: React.ReactNode }): JSX.Element {
+  return (
+    <div className="pointer-events-none fixed bottom-4 right-4 z-40 flex flex-col items-end gap-2">
+      {children}
+    </div>
+  )
+}
+
 function AppUpdateNotice({
   hidden
 }: {
@@ -205,7 +215,7 @@ function AppUpdateNotice({
     <div
       role="status"
       aria-live="polite"
-      className="fixed bottom-4 right-4 z-40 flex max-w-[min(28rem,calc(100vw-2rem))] items-center gap-2 rounded-xl border border-accent/30 bg-paper-50/95 px-3 py-2 text-sm text-ink-800 shadow-float backdrop-blur"
+      className="pointer-events-auto flex max-w-[min(28rem,calc(100vw-2rem))] items-center gap-2 rounded-xl border border-accent/30 bg-paper-50/95 px-3 py-2 text-sm text-ink-800 shadow-float backdrop-blur"
     >
       <span className="h-2 w-2 shrink-0 rounded-full bg-accent shadow-[0_0_0_4px_rgb(var(--z-accent)/0.12)]" />
       <span className="min-w-0 truncate font-medium">{label}</span>
@@ -304,6 +314,13 @@ function App(): JSX.Element {
       setSettingsOpen(true)
     })
   }, [setSettingsOpen])
+
+  // A clicked study-reminder notification (desktop) lands on the dashboard.
+  useEffect(() => {
+    return window.zen.onOpenStudyDashboard(() => {
+      void useStore.getState().openStudyDashboard()
+    })
+  }, [])
 
   useEffect(() => {
     return window.zen.onOpenNoteRequested((relPath) => {
@@ -732,7 +749,9 @@ function App(): JSX.Element {
         <PromptHost />
         <ConfirmHost />
         <ServerDirectoryPickerHost />
-        <AppUpdateNotice hidden={zenMode} />
+        <CornerOverlays>
+          <AppUpdateNotice hidden={zenMode} />
+        </CornerOverlays>
       </div>
     )
   }
@@ -747,7 +766,9 @@ function App(): JSX.Element {
         <PromptHost />
         <ConfirmHost />
         <ServerDirectoryPickerHost />
-        <AppUpdateNotice hidden={zenMode} />
+        <CornerOverlays>
+          <AppUpdateNotice hidden={zenMode} />
+        </CornerOverlays>
       </div>
     )
   }
@@ -805,7 +826,11 @@ function App(): JSX.Element {
       <PromptHost />
       <ConfirmHost />
       <ServerDirectoryPickerHost />
-      <AppUpdateNotice hidden={zenMode || settingsOpen} />
+      <CornerOverlays>
+        {/* The pomodoro overlay stays up in zen mode — it's a focus tool. */}
+        <PomodoroOverlay />
+        <AppUpdateNotice hidden={zenMode || settingsOpen} />
+      </CornerOverlays>
       <Suspense fallback={null}>
         <VimNav />
       </Suspense>

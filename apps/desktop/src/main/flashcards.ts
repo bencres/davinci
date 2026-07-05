@@ -108,7 +108,10 @@ export async function writeFlashcards(
   const normalized: FlashcardDeck = {
     version: FLASHCARD_STORE_VERSION,
     sourceNotePath: notePath.replace(/\\/g, '/').replace(/^\/+/, ''),
-    cards: deck.cards ?? []
+    cards: deck.cards ?? [],
+    // Preserve the content-authored timestamp; every other write (e.g. grading)
+    // must not lose it, or deck staleness detection silently breaks.
+    ...(deck.authoredAt != null ? { authoredAt: deck.authoredAt } : {})
   }
   const abs = absolutePath(root, deckPathForNote(notePath))
   await writeFileAtomic(abs, JSON.stringify(normalized, null, 2))

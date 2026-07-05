@@ -9,7 +9,8 @@ import {
   isFlashcardsTabPath,
   isStudyTabPath,
   isStudyDashboardTabPath,
-  isConceptGraphTabPath
+  isConceptGraphTabPath,
+  isFeedbackLabTabPath // TEMP(feedback-lab)
 } from '@shared/flashcards'
 import { isAssetsViewTabPath } from '@shared/assets-view'
 import { isAssetTabPath } from './asset-tabs'
@@ -31,7 +32,8 @@ export function isWorkspaceVirtualTabPath(path: string): boolean {
     isFlashcardsTabPath(path) ||
     isStudyTabPath(path) ||
     isStudyDashboardTabPath(path) ||
-    isConceptGraphTabPath(path)
+    isConceptGraphTabPath(path) ||
+    isFeedbackLabTabPath(path) // TEMP(feedback-lab)
   )
 }
 

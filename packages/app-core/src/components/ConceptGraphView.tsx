@@ -35,7 +35,7 @@ function masteryFill(node: ConceptNode): string {
 
 /** Gap ring stroke (amber for weak foundations, dashed grey for untaught prereqs). */
 function gapStroke(node: ConceptNode): { stroke: string; dash?: string; width: number } {
-  if (!node.isGap) return { stroke: 'rgba(15,23,42,0.12)', width: 1 }
+  if (!node.isGap) return { stroke: 'rgb(var(--z-fg) / 0.18)', width: 1 }
   if (node.gapReason === 'orphan-prereq') return { stroke: '#94a3b8', dash: '4 3', width: 2 }
   return { stroke: '#f59e0b', width: 2.5 } // unmet-prereq / weak
 }
@@ -162,7 +162,7 @@ export function ConceptGraphView({ isActive }: Props): JSX.Element {
         >
           <defs>
             <marker id="cg-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M0,0 L10,5 L0,10 z" fill="rgba(15,23,42,0.28)" />
+              <path d="M0,0 L10,5 L0,10 z" style={{ fill: 'rgb(var(--z-fg) / 0.55)' }} />
             </marker>
           </defs>
 
@@ -181,8 +181,8 @@ export function ConceptGraphView({ isActive }: Props): JSX.Element {
                 key={i}
                 d={`M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`}
                 fill="none"
-                stroke="rgba(15,23,42,0.18)"
-                strokeWidth={1.25}
+                style={{ stroke: 'rgb(var(--z-fg) / 0.4)' }}
+                strokeWidth={1.5}
                 markerEnd="url(#cg-arrow)"
               />
             )
@@ -197,19 +197,24 @@ export function ConceptGraphView({ isActive }: Props): JSX.Element {
                 key={node.key}
                 transform={`translate(${cx - NODE_W / 2}, ${y - NODE_H / 2})`}
                 className="cursor-pointer"
-                onClick={() => void startStudySession({ kind: 'concept', concept: node.concept })}
+                onClick={(e) =>
+                  void startStudySession(
+                    { kind: 'concept', concept: node.concept },
+                    e.altKey || e.shiftKey ? { includePrerequisites: true } : undefined
+                  )
+                }
               >
                 <title>
                   {`${node.concept}\n${node.mature}/${node.total} mastered · ${node.masteryPct}% mastery${
                     node.total > 0 && node.accuracy > 0 ? ` · ${Math.round(node.accuracy * 100)}% accuracy` : ''
-                  }${node.isGap ? `\ngap: ${node.gapReason}` : ''}`}
+                  }${node.isGap ? `\ngap: ${node.gapReason}` : ''}\nClick to study · Alt/Shift-click to include prerequisites`}
                 </title>
                 <rect
                   width={NODE_W}
                   height={NODE_H}
                   rx={8}
                   fill={masteryFill(node)}
-                  stroke={ring.stroke}
+                  style={{ stroke: ring.stroke }}
                   strokeWidth={ring.width}
                   strokeDasharray={ring.dash}
                 />

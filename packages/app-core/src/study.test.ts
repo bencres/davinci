@@ -172,6 +172,16 @@ describe('study-session store slice', () => {
     expect('learnerAnswer' in g).toBe(false)
   })
 
+  it('omits predictedRating when the learner skipped predicting', async () => {
+    const { useStore } = await loadStore()
+    await useStore.getState().startStudySession({ kind: 'all' })
+    useStore.getState().revealCurrentCard()
+    await useStore.getState().gradeCurrentCard('good')
+    const g = useStore.getState().studySessionGrades[0]
+    // A defaulted prediction would read as perfectly calibrated — must be absent.
+    expect('predictedRating' in g).toBe(false)
+  })
+
   it('re-queues an Again-rated card so it returns before the session ends', async () => {
     const { useStore } = await loadStore()
     await useStore.getState().startStudySession({ kind: 'all' })

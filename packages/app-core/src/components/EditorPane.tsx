@@ -103,6 +103,7 @@ import { FlashcardReviewView } from './FlashcardReviewView'
 import { StudyView } from './StudyView'
 import { StudyDashboard } from './StudyDashboard'
 import { ConceptGraphView } from './ConceptGraphView'
+import { FeedbackLab } from './FeedbackLab' // TEMP(feedback-lab)
 import { LazyExcalidrawView } from './LazyExcalidrawView'
 import { isExcalidrawPath } from '@shared/excalidraw'
 import { TagView } from './TagView'
@@ -119,6 +120,7 @@ import {
   isStudyTabPath,
   isStudyDashboardTabPath,
   isConceptGraphTabPath,
+  isFeedbackLabTabPath, // TEMP(feedback-lab)
   studyTitleFromTab
 } from '@shared/flashcards'
 import { isTagsTabPath } from '@shared/tags'
@@ -2390,6 +2392,14 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             isStudy: true
           }
         }
+        if (isFeedbackLabTabPath(path)) {
+          // TEMP(feedback-lab)
+          return {
+            ...base,
+            title: 'Feedback Lab',
+            isStudy: true
+          }
+        }
         if (isStudyTabPath(path)) {
           return {
             ...base,
@@ -3296,6 +3306,8 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             <StudyDashboard isActive={isActive} />
           ) : isConceptGraphTabPath(activeTab) ? (
             <ConceptGraphView isActive={isActive} />
+          ) : isFeedbackLabTabPath(activeTab) ? ( // TEMP(feedback-lab)
+            <FeedbackLab />
           ) : activeTab && isExcalidrawPath(activeTab) ? (
             <LazyExcalidrawView path={activeTab} />
           ) : content ? (

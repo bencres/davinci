@@ -198,6 +198,55 @@ export function selectDueQueue(index: CardIndex, opts: DueQueueOptions = {}): st
   ]
 }
 
+export interface FreeQueueOptions {
+  /** Randomize order (Fisher–Yates). Default false → deterministic id order. */
+  shuffle?: boolean
+  /** Cap the queue length (with `shuffle`, a random subset). Default: no cap. */
+  limit?: number
+  /** Injectable RNG in [0,1) for deterministic shuffling (default Math.random). */
+  rng?: () => number
+}
+
+/**
+ * Build a "free study" queue that ignores SRS due dates: every card in the
+ * index, so a learner can practice a deck or concept — or a random subset of
+ * the whole vault — even when nothing is scheduled. Deterministic id order by
+ * default; `shuffle` randomizes for a varied or random-subset session.
+ */
+export function selectFreeQueue(index: CardIndex, opts: FreeQueueOptions = {}): string[] {
+  const ids = Object.keys(index).sort(byIdAsc)
+  if (opts.shuffle) {
+    const rng = opts.rng ?? Math.random
+    for (let i = ids.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1))
+      ;[ids[i], ids[j]] = [ids[j], ids[i]]
+    }
+  }
+  const limit = opts.limit
+  return limit != null && limit >= 0 ? ids.slice(0, limit) : ids
+}
+
+export interface NewQueueOptions {
+  /** Cap the queue length (default: no cap). */
+  limit?: number
+}
+
+/**
+ * New (never-scheduled) cards only, oldest-authored first — a "learn ahead"
+ * queue that ignores the daily new-card cap so a learner can deliberately drill
+ * fresh material. Deterministic (createdAt asc then id).
+ */
+export function selectNewQueue(index: CardIndex, opts: NewQueueOptions = {}): string[] {
+  const news: Array<{ id: string; createdAt: number }> = []
+  for (const [id, entry] of Object.entries(index)) {
+    if (isNew(entry.card.srs)) news.push({ id, createdAt: entry.card.createdAt })
+  }
+  news.sort((a, b) => a.createdAt - b.createdAt || byIdAsc(a.id, b.id))
+  const ids = news.map((x) => x.id)
+  const limit = opts.limit
+  return limit != null && limit >= 0 ? ids.slice(0, limit) : ids
+}
+
 // ---------------------------------------------------------------------------
 // Session shaping (pure): warm-up, interleaving, cooldown.
 // ---------------------------------------------------------------------------

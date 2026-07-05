@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Flashcard, FlashcardDeck, ReviewGrade, ReviewLogFile, SrsState } from './flashcards'
 import { FLASHCARD_STORE_VERSION, REVIEW_LOG_VERSION } from './flashcards'
 import { MATURE_DAYS } from './study-stats'
-import { buildConceptGraph, conceptKey, WEAK_MASTERY_THRESHOLD } from './concept-graph'
+import { buildConceptGraph, conceptKey, prerequisiteChain, WEAK_MASTERY_THRESHOLD } from './concept-graph'
 
 // --- builders (mirror study-stats.test.ts) ---
 
@@ -192,5 +192,43 @@ describe('buildConceptGraph', () => {
       []
     )
     expect(g.nodes.find((n) => n.key === 'edge')!.isGap).toBe(false)
+  })
+})
+
+describe('prerequisiteChain', () => {
+  it('returns the target plus transitive prerequisites, foundational-first', () => {
+    // A -> B -> C (study C, but A and B come first, in depth order).
+    const g = buildConceptGraph(
+      [
+        deck('n.md', [
+          card({ concepts: ['B'], prerequisites: ['A'] }),
+          card({ concepts: ['C'], prerequisites: ['B'] })
+        ])
+      ],
+      []
+    )
+    expect(prerequisiteChain(g, 'C')).toEqual(['a', 'b', 'c'])
+    // A standalone concept with no prerequisites is just itself.
+    expect(prerequisiteChain(g, 'A')).toEqual(['a'])
+  })
+
+  it('matches the target by normalized key and ignores unknown concepts', () => {
+    const g = buildConceptGraph([deck('n.md', [card({ concepts: ['Trees'], prerequisites: ['Pointers'] })])], [])
+    expect(prerequisiteChain(g, '  TREES ')).toEqual(['pointers', 'trees'])
+    expect(prerequisiteChain(g, 'Nonexistent')).toEqual(['nonexistent'])
+    expect(prerequisiteChain(g, '   ')).toEqual([])
+  })
+
+  it('tolerates cycles without looping forever', () => {
+    const g = buildConceptGraph(
+      [
+        deck('n.md', [
+          card({ concepts: ['A'], prerequisites: ['B'] }),
+          card({ concepts: ['B'], prerequisites: ['A'] })
+        ])
+      ],
+      []
+    )
+    expect(prerequisiteChain(g, 'A').sort()).toEqual(['a', 'b'])
   })
 })

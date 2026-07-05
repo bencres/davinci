@@ -31,11 +31,13 @@ const synthesisDraft: FlashcardDraft = {
 
 let generateMock: ReturnType<typeof vi.fn>
 let writeMock: ReturnType<typeof vi.fn>
+let searchMock: ReturnType<typeof vi.fn>
 
 function installZen(): void {
   generateMock = vi.fn().mockResolvedValue({ drafts: [recallDraft, synthesisDraft], dropped: 1 })
   // Echo the written deck back, as the real bridge does.
   writeMock = vi.fn().mockImplementation((_n: string, deck: FlashcardDeck) => Promise.resolve(deck))
+  searchMock = vi.fn().mockResolvedValue([])
   Object.defineProperty(window, 'zen', {
     configurable: true,
     value: {
@@ -58,7 +60,8 @@ function installZen(): void {
       getVaultSettings: vi.fn().mockResolvedValue({}),
       generateFlashcards: generateMock,
       readFlashcards: vi.fn().mockResolvedValue(null),
-      writeFlashcards: writeMock
+      writeFlashcards: writeMock,
+      searchVaultText: searchMock
     }
   })
 }
@@ -215,6 +218,17 @@ describe('flashcards store slice', () => {
     expect(s.flashcardDraftCards).toHaveLength(0)
   })
 
+  it('saveReviewedFlashcards stamps the deck as freshly authored', async () => {
+    const { useStore } = await loadStore()
+    useStore.setState({ flashcardReviewNote: NOTE })
+    await useStore.getState().generateFlashcardsForActiveNote()
+    const before = Date.now()
+    await useStore.getState().saveReviewedFlashcards([0])
+    const [, deck] = writeMock.mock.calls[0] as [string, FlashcardDeck]
+    // The review-surface save vouches for the deck against the current note.
+    expect(deck.authoredAt).toBeGreaterThanOrEqual(before)
+  })
+
   it('saving an unaccepted-only set is a no-op (nothing written)', async () => {
     const { useStore } = await loadStore()
     useStore.setState({ flashcardReviewNote: NOTE })
@@ -275,6 +289,36 @@ describe('flashcards store slice', () => {
     expect(saved.srs).toEqual(srs) // scheduling state preserved
     expect(saved.createdAt).toBe(111) // createdAt preserved
     expect(saved.userEdited).toBe(true) // flagged as edited
+  })
+
+  it('generateCardsForConcept opens the best-covered note with prefilled instructions', async () => {
+    const { useStore } = await loadStore()
+    const match = (path: string, lineNumber: number) => ({
+      path,
+      title: path,
+      folder: 'inbox',
+      lineNumber,
+      offset: 0,
+      lineText: 'mentions Hashing'
+    })
+    // b.md mentions the concept twice, a.md once → b.md wins.
+    searchMock.mockResolvedValue([match('a.md', 1), match('b.md', 3), match('b.md', 9)])
+
+    const outcome = await useStore.getState().generateCardsForConcept('Hashing')
+    expect(outcome).toBe('opened')
+    expect(searchMock).toHaveBeenCalledWith('Hashing')
+    const s = useStore.getState()
+    expect(s.flashcardReviewNote).toBe('b.md')
+    expect(s.flashcardReviewMode).toBe('custom')
+    expect(s.flashcardGenStatus).toBe('configuring') // form shown, nothing auto-generated
+    expect(s.flashcardGenOptions.instructions).toContain('"Hashing"')
+    expect(generateMock).not.toHaveBeenCalled()
+  })
+
+  it('generateCardsForConcept reports no-notes when the vault never mentions it', async () => {
+    const { useStore } = await loadStore()
+    expect(await useStore.getState().generateCardsForConcept('Unwritten')).toBe('no-notes')
+    expect(useStore.getState().flashcardReviewNote).toBeNull()
   })
 
   it('surfaces a friendly message when generation reports no API key', async () => {

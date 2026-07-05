@@ -73,7 +73,8 @@ const DESKTOP_CAPABILITIES: ZenCapabilities = {
   // ~/.local/bin symlinks. Windows uses a different model (PATH munging)
   // and is gated to a follow-up.
   supportsCliInstall: process.platform === 'darwin' || process.platform === 'linux',
-  supportsCustomTemplates: true
+  supportsCustomTemplates: true,
+  supportsStudyReminders: true
 }
 
 const DESKTOP_APP_INFO: ZenAppInfo = {
@@ -452,6 +453,11 @@ const api: ZenBridge = {
     const listener = (): void => cb()
     ipcRenderer.on(IPC.APP_OPEN_SETTINGS, listener)
     return () => ipcRenderer.removeListener(IPC.APP_OPEN_SETTINGS, listener)
+  },
+  onOpenStudyDashboard: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on(IPC.APP_OPEN_STUDY_DASHBOARD, listener)
+    return () => ipcRenderer.removeListener(IPC.APP_OPEN_STUDY_DASHBOARD, listener)
   },
   onOpenNoteRequested: (cb: (relPath: string) => void): (() => void) => {
     const listener = (_: unknown, relPath: string): void => cb(relPath)

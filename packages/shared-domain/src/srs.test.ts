@@ -6,6 +6,8 @@ import {
   isDue,
   isNew,
   selectDueQueue,
+  selectFreeQueue,
+  selectNewQueue,
   shapeSession,
   splitNewVsReview,
   srsToFsrsCard,
@@ -123,6 +125,25 @@ describe('selectDueQueue', () => {
     expect(selectDueQueue(index(cards), { now: NOW, newPerDay: 2, newDoneToday: 5 })).toEqual([])
   })
 
+  it('ignores due dates and includes every card, even when nothing is due', () => {
+    const cards = [
+      card('future', reviewSrs({ due: ISO('2026-07-01T00:00:00.000Z') }), 0),
+      card('also-future', reviewSrs({ due: ISO('2026-08-01T00:00:00.000Z') }), 0)
+    ]
+    // selectDueQueue would be empty here; free study still yields both cards.
+    expect(selectDueQueue(index(cards), { now: NOW })).toEqual([])
+    expect(selectFreeQueue(index(cards))).toEqual(['also-future', 'future'])
+  })
+
+  it('shuffles deterministically with an injected rng and applies a limit', () => {
+    const cards = ['a', 'b', 'c', 'd'].map((id) => card(id, reviewSrs()))
+    // rng always returns 0 → Fisher–Yates swaps each i with index 0.
+    const q = selectFreeQueue(index(cards), { shuffle: true, rng: () => 0 })
+    expect([...q].sort()).toEqual(['a', 'b', 'c', 'd']) // same set, reordered
+    expect(q).toEqual(['b', 'c', 'd', 'a'])
+    expect(selectFreeQueue(index(cards), { shuffle: true, rng: () => 0, limit: 2 })).toEqual(['b', 'c'])
+  })
+
   it('caps due reviews but never learning-due cards', () => {
     const cards = [
       card('r1', reviewSrs({ due: ISO('2026-06-18T00:00:00.000Z') }), 0),
@@ -131,6 +152,19 @@ describe('selectDueQueue', () => {
     ]
     const q = selectDueQueue(index(cards), { now: NOW, maxReviewsPerDay: 1 })
     expect(q).toEqual(['l1', 'r1']) // relearning always in; reviews capped to 1
+  })
+})
+
+describe('selectNewQueue', () => {
+  it('returns only new cards, oldest-authored first, ignoring the daily cap', () => {
+    const cards = [
+      card('new-b', newSrsState(), 200),
+      card('new-a', newSrsState(), 100),
+      card('rev', reviewSrs({ due: ISO('2026-06-18T00:00:00.000Z') }), 0),
+      card('new-c', newSrsState(), 300)
+    ]
+    expect(selectNewQueue(index(cards))).toEqual(['new-a', 'new-b', 'new-c'])
+    expect(selectNewQueue(index(cards), { limit: 2 })).toEqual(['new-a', 'new-b'])
   })
 })
 

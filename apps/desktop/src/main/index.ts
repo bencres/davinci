@@ -161,6 +161,7 @@ import {
   installAppUpdate,
   scheduleBackgroundAppUpdateCheck
 } from './updater'
+import { initStudyReminders } from './study-reminders'
 import type { McpClientId, McpInstructionsPayload } from '@shared/mcp-clients'
 import {
   instructionsFilePath,
@@ -3396,6 +3397,9 @@ app.whenReady().then(async () => {
   }
   void flushPendingFloatingNoteRequests()
   scheduleBackgroundAppUpdateCheck()
+  // Study reminders read the active LOCAL vault lazily each tick; remote
+  // workspaces (no local root to read decks from) simply skip the check.
+  initStudyReminders(() => (isRemoteWorkspaceActive() ? null : currentVault?.root ?? null))
 
   try {
     const cfg = await loadConfig()

@@ -3,12 +3,15 @@ import type { Flashcard, FlashcardDeck, ReviewGrade, ReviewLogFile, SrsState } f
 import { FLASHCARD_STORE_VERSION, REVIEW_LOG_VERSION } from './flashcards'
 import {
   CALIBRATION_RECENT_WINDOW,
+  collectLeeches,
   computeCalibration,
   computeCurrentStreak,
   computeLongestStreak,
   computeStudyStats,
   DEFAULT_STUDY_GAMIFICATION,
+  findStaleDecks,
   HEATMAP_DAYS,
+  LEECH_LAPSES_THRESHOLD,
   localDateKey,
   MATURE_DAYS,
   normalizeGamification,
@@ -81,6 +84,20 @@ describe('normalizeGamification', () => {
     expect(g.dailyGoal).toBe(35)
     expect(g.streakFreezes).toBe(2)
     expect(g.freezeUsedDates).toEqual(['2026-06-01'])
+  })
+  it('normalizes the pomodoro block, upgrading pre-pomodoro configs', () => {
+    // A gamification.json written before the pomodoro feature has neither field.
+    const legacy = normalizeGamification({ dailyGoal: 35 })
+    expect(legacy.pomodoro).toEqual(DEFAULT_STUDY_GAMIFICATION.pomodoro)
+    expect(legacy.pomodoroNotificationsEnabled).toBe(true)
+    const g = normalizeGamification({
+      pomodoro: { focusMinutes: 50, longBreakEvery: 2 },
+      pomodoroNotificationsEnabled: false
+    })
+    expect(g.pomodoro.focusMinutes).toBe(50)
+    expect(g.pomodoro.breakMinutes).toBe(DEFAULT_STUDY_GAMIFICATION.pomodoro.breakMinutes)
+    expect(g.pomodoro.longBreakEvery).toBe(2)
+    expect(g.pomodoroNotificationsEnabled).toBe(false)
   })
 })
 
@@ -247,5 +264,91 @@ describe('computeCalibration', () => {
   it('drops grades with unparseable timestamps', () => {
     const c = computeCalibration([cal('good', 'good', 'not-a-date'), cal('easy', 'again', '2026-06-01T09:00:00.000Z')])
     expect(c.sampleSize).toBe(1)
+  })
+
+  it('excludes grades where the learner skipped the prediction', () => {
+    const skipped: ReviewGrade = { cardId: 'c', reviewedAt: '2026-06-01T09:00:00.000Z', rating: 'good' }
+    // Only the predicted grade counts; a skipped prediction must not read as perfect.
+    const c = computeCalibration([skipped, cal('easy', 'again', '2026-06-02T09:00:00.000Z')])
+    expect(c.sampleSize).toBe(1)
+    expect(c.meanAbsError).toBeCloseTo(3)
+    // All-skipped history yields an empty calibration, not a perfect one.
+    expect(computeCalibration([skipped]).sampleSize).toBe(0)
+  })
+})
+
+describe('findStaleDecks', () => {
+  it('flags decks whose note was edited after authoring, newest edit first', () => {
+    const decks = [
+      { ...deck('stale.md', [card()]), authoredAt: 1000 },
+      { ...deck('staler.md', [card()]), authoredAt: 1000 },
+      { ...deck('fresh.md', [card()]), authoredAt: 5000 },
+      deck('empty.md', [])
+    ]
+    const updated: Record<string, number> = {
+      'stale.md': 2000,
+      'staler.md': 3000,
+      'fresh.md': 4000,
+      'empty.md': 9000
+    }
+    const stale = findStaleDecks(decks, (p) => updated[p])
+    expect(stale.map((d) => d.notePath)).toEqual(['staler.md', 'stale.md']) // empty + fresh skipped
+    expect(stale[0]).toMatchObject({ cardCount: 1, noteUpdatedAt: 3000 })
+  })
+
+  it('skips notes the lookup does not know (deleted/renamed)', () => {
+    const decks = [{ ...deck('gone.md', [card()]), authoredAt: 1 }]
+    expect(findStaleDecks(decks, () => undefined)).toEqual([])
+  })
+
+  it('falls back to newest card createdAt for legacy decks without authoredAt', () => {
+    const legacy = deck('legacy.md', [card({ createdAt: 1000 })])
+    expect(findStaleDecks([legacy], () => 2000)).toHaveLength(1)
+    expect(findStaleDecks([legacy], () => 500)).toHaveLength(0)
+  })
+})
+
+describe('collectLeeches', () => {
+  it('includes only cards at or above the lapse threshold', () => {
+    const decks = [
+      deck('a.md', [
+        card({ id: 'leech', srs: srs({ state: 'review', lapses: LEECH_LAPSES_THRESHOLD }) }),
+        card({ id: 'fine', srs: srs({ state: 'review', lapses: LEECH_LAPSES_THRESHOLD - 1 }) })
+      ])
+    ]
+    const leeches = collectLeeches(decks, [])
+    expect(leeches.map((l) => l.cardId)).toEqual(['leech'])
+    expect(leeches[0].sourceNotePath).toBe('a.md')
+    expect(leeches[0].focusConcept).toBe('X')
+  })
+
+  it('orders worst-first: lapses desc, then accuracy asc, then stability asc', () => {
+    const decks = [
+      deck('a.md', [
+        card({ id: 'worst', srs: srs({ state: 'review', lapses: 8, stability: 1 }) }),
+        card({ id: 'lowAcc', srs: srs({ state: 'review', lapses: 5, stability: 1 }) }),
+        card({ id: 'highAcc', srs: srs({ state: 'review', lapses: 5, stability: 1 }) })
+      ])
+    ]
+    const logs = [
+      log('a.md', [
+        grade('lowAcc', '2026-06-01T09:00:00.000Z', 'again'),
+        grade('highAcc', '2026-06-01T09:00:00.000Z', 'good')
+      ])
+    ]
+    expect(collectLeeches(decks, logs).map((l) => l.cardId)).toEqual(['worst', 'lowAcc', 'highAcc'])
+    const lowAcc = collectLeeches(decks, logs).find((l) => l.cardId === 'lowAcc')!
+    expect(lowAcc.accuracy).toBe(0)
+  })
+
+  it('respects the limit and custom threshold', () => {
+    const decks = [
+      deck('a.md', [
+        card({ id: 'l1', srs: srs({ state: 'review', lapses: 3 }) }),
+        card({ id: 'l2', srs: srs({ state: 'review', lapses: 2 }) })
+      ])
+    ]
+    expect(collectLeeches(decks, [], { minLapses: 2 })).toHaveLength(2)
+    expect(collectLeeches(decks, [], { minLapses: 2, limit: 1 }).map((l) => l.cardId)).toEqual(['l1'])
   })
 })

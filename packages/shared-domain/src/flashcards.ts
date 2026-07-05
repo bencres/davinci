@@ -74,8 +74,8 @@ export const FSRS_RATING_VALUE: Record<FsrsRating, number> = {
 }
 
 /** The 1–4 numeric value for an FSRS rating (NaN for an unknown/missing rating). */
-export function ratingToNumber(rating: FsrsRating): number {
-  return FSRS_RATING_VALUE[rating] ?? NaN
+export function ratingToNumber(rating: FsrsRating | undefined): number {
+  return (rating && FSRS_RATING_VALUE[rating]) ?? NaN
 }
 
 /**
@@ -181,6 +181,13 @@ export interface FlashcardDeck {
   version: typeof FLASHCARD_STORE_VERSION
   sourceNotePath: string // vault-relative POSIX path of the note
   cards: Flashcard[]
+  /**
+   * When a human last authored/reviewed the deck's CONTENT against the note
+   * (ms). Set only by the deck review/edit save — never by grading, which also
+   * rewrites this file — so `noteUpdatedAt > authoredAt` means the note moved on
+   * since the cards were written. Absent on legacy decks (see `deckAuthoredAt`).
+   */
+  authoredAt?: number
 }
 
 /** Lightweight listing entry for deck discovery / the cross-deck index. */
@@ -203,7 +210,7 @@ export interface GradedCriterion {
 export interface ReviewGrade {
   cardId: string
   reviewedAt: string // ISO
-  predictedRating: FsrsRating // calibration: self-prediction BEFORE reveal (same 1–4 scale)
+  predictedRating?: FsrsRating // calibration: self-prediction BEFORE reveal (same 1–4 scale); absent when the learner skipped predicting
   rating: FsrsRating // what FSRS consumes — actual self-grade AFTER reveal
   // synthesis only — self-assessment against the bulleted rubric:
   learnerAnswer?: string
@@ -386,6 +393,16 @@ export function isConceptGraphTabPath(path: string | null | undefined): boolean 
   return path === CONCEPT_GRAPH_TAB_PATH
 }
 
+// TEMP(feedback-lab): scratch tab for auditioning grade-feedback patterns. Remove
+// this block and its references (FeedbackLab.tsx, workspace-tabs, commands, EditorPane).
+/** Virtual tab path for the temporary grade-feedback playground. */
+export const FEEDBACK_LAB_TAB_PATH = 'zen://feedback-lab'
+
+/** True for the feedback-lab tab. */
+export function isFeedbackLabTabPath(path: string | null | undefined): boolean {
+  return path === FEEDBACK_LAB_TAB_PATH
+}
+
 // ---------------------------------------------------------------------------
 // Defensive normalization of Claude output (mirror dbNormalizeSidecar).
 // ---------------------------------------------------------------------------
@@ -538,6 +555,25 @@ export function emptyDeck(notePath: string): FlashcardDeck {
   return { version: FLASHCARD_STORE_VERSION, sourceNotePath: toPosixPath(notePath), cards: [] }
 }
 
+/**
+ * When the deck's content was last authored: the explicit `authoredAt`, or —
+ * for legacy decks predating the field — the newest card's `createdAt` (edits
+ * preserve card identity, so appended cards are the only fallback signal).
+ */
+export function deckAuthoredAt(deck: FlashcardDeck): number {
+  if (deck.authoredAt != null && Number.isFinite(deck.authoredAt)) return deck.authoredAt
+  let latest = 0
+  for (const card of deck.cards) {
+    if (Number.isFinite(card.createdAt) && card.createdAt > latest) latest = card.createdAt
+  }
+  return latest
+}
+
+/** True when the source note was edited after the deck's content was last authored. */
+export function isDeckStale(deck: FlashcardDeck, noteUpdatedAt: number): boolean {
+  return Number.isFinite(noteUpdatedAt) && noteUpdatedAt > deckAuthoredAt(deck)
+}
+
 /** A fresh, empty review-log file for a note. */
 export function emptyReviewLog(notePath: string): ReviewLogFile {
   return { version: REVIEW_LOG_VERSION, sourceNotePath: toPosixPath(notePath), grades: [] }
@@ -660,14 +696,79 @@ export function findSourceQuoteOffset(body: string, quote: string): number | nul
 const normalizeAnswerText = (s: string): string =>
   s.trim().toLowerCase().replace(/\s+/g, ' ')
 
+/** How a typed recall answer compares to the card's answer(s). */
+export type RecallMatch = 'exact' | 'close' | 'miss'
+
+/** Damerau–Levenshtein (OSA) edit distance — insertions, deletions,
+ *  substitutions, and adjacent transpositions each cost 1, since swapped
+ *  letters are the most common honest typo. Iterative rows; pure, zero-dep. */
+function editDistance(a: string, b: string): number {
+  const cols = b.length + 1
+  let prev2: number[] = []
+  let prev: number[] = []
+  for (let j = 0; j < cols; j++) prev.push(j)
+  for (let i = 1; i <= a.length; i++) {
+    const curr: number[] = [i]
+    for (let j = 1; j < cols; j++) {
+      let d = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        d = Math.min(d, prev2[j - 2] + 1)
+      }
+      curr.push(d)
+    }
+    prev2 = prev
+    prev = curr
+  }
+  return prev[cols - 1]
+}
+
+/** Edit-distance budget for a "close" match against a candidate of this length. */
+function closeEditBudget(len: number): number {
+  return Math.min(4, Math.max(1, Math.floor(len * 0.15)))
+}
+
+/**
+ * Tiered auto-check for a typed recall answer against back + acceptableAnswers.
+ * `exact` is normalized equality (the only tier the strict boolean check ever
+ * granted); `close` tolerates honest typos — a length-scaled edit distance, or,
+ * for multi-word answers, all answer words present in what was typed — so typing
+ * an answer isn't punished by exact-string matching. Candidates of ≤2 characters
+ * must match exactly (too short to fuzz).
+ */
+export function matchRecallAnswer(
+  typed: string,
+  back: string,
+  acceptableAnswers: string[] = []
+): RecallMatch {
+  const t = normalizeAnswerText(typed)
+  if (!t) return 'miss'
+  const candidates = [back, ...acceptableAnswers].map(normalizeAnswerText).filter(Boolean)
+  if (candidates.includes(t)) return 'exact'
+  const typedTokens = new Set(t.split(' '))
+  for (const cand of candidates) {
+    if (cand.length <= 2) continue
+    const budget = closeEditBudget(cand.length)
+    // Length gap is a lower bound on edit distance — skip the O(n·m) walk early.
+    if (Math.abs(cand.length - t.length) <= budget && editDistance(t, cand) <= budget) {
+      return 'close'
+    }
+    const candTokens = cand.split(' ')
+    if (candTokens.length >= 2 && candTokens.every((tok) => typedTokens.has(tok))) return 'close'
+  }
+  return 'miss'
+}
+
+/** Suggested FSRS rating for a typed recall answer (never `easy` — that stays a
+ *  deliberate choice about future scheduling, not something to auto-suggest). */
+export function recallMatchToRating(match: RecallMatch): FsrsRating {
+  return match === 'exact' ? 'good' : match === 'close' ? 'hard' : 'again'
+}
+
 /** Auto-check assist for recall cards: typed answer vs. back + acceptableAnswers. */
 export function checkRecallAnswer(
   typed: string,
   back: string,
   acceptableAnswers: string[] = []
 ): boolean {
-  const t = normalizeAnswerText(typed)
-  if (!t) return false
-  const candidates = [back, ...acceptableAnswers].map(normalizeAnswerText)
-  return candidates.includes(t)
+  return matchRecallAnswer(typed, back, acceptableAnswers) === 'exact'
 }

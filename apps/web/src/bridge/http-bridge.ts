@@ -109,7 +109,8 @@ const WEB_CAPABILITIES: ZenCapabilities = {
   supportsLocalFilesystemPickers: false,
   supportsRemoteWorkspace: false,
   supportsCliInstall: false,
-  supportsCustomTemplates: false
+  supportsCustomTemplates: false,
+  supportsStudyReminders: false
 }
 
 const WEB_APP_INFO: ZenAppInfo = {
@@ -955,7 +956,10 @@ async function writeFlashcards(notePath: string, deck: FlashcardDeck): Promise<F
   const normalized: FlashcardDeck = {
     version: deck.version,
     sourceNotePath: notePath.replace(/\\/g, '/').replace(/^\/+/, ''),
-    cards: deck.cards ?? []
+    cards: deck.cards ?? [],
+    // Preserve the content-authored timestamp; every other write (e.g. grading)
+    // must not lose it, or deck staleness detection silently breaks.
+    ...(deck.authoredAt != null ? { authoredAt: deck.authoredAt } : {})
   }
   await writeNote(deckPathForNote(notePath), `${JSON.stringify(normalized, null, 2)}\n`)
   return normalized
@@ -1281,6 +1285,11 @@ const settingsListeners = new Set<() => void>()
 function onOpenSettings(cb: () => void): () => void {
   settingsListeners.add(cb)
   return () => settingsListeners.delete(cb)
+}
+
+/** Study reminders are desktop-only; the web bridge never fires this. */
+function onOpenStudyDashboard(_cb: () => void): () => void {
+  return () => {}
 }
 
 async function getAppIconDataUrl(): Promise<string | null> {
@@ -1653,6 +1662,7 @@ export const httpBridge: ZenBridge = {
 
   onVaultChange,
   onOpenSettings,
+  onOpenStudyDashboard,
   onOpenNoteRequested,
   notifyRendererReady,
   onAppUpdateState,

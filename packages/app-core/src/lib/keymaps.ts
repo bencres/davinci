@@ -63,6 +63,12 @@ export type KeymapId =
   | "vim.leaderStudyReviewNote"
   | "vim.leaderStudyDashboard"
   | "vim.leaderStudyGraph"
+  | "vim.leaderStudyWeak"
+  | "vim.leaderStudyRedo"
+  | "vim.leaderStudyCalibration"
+  | "vim.leaderStudyNew"
+  | "vim.leaderStudyRandom"
+  | "vim.leaderStudyPomodoro"
   | "vim.panePrefix"
   | "vim.paneFocusLeft"
   | "vim.paneFocusDown"
@@ -670,6 +676,72 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     title: "Study group: open concept graph",
     description: "Open the concept (knowledge) graph: prerequisites, mastery, and gaps.",
     defaultBinding: "k",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyWeak",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: weak spots",
+    description: "Drill the cards you struggle with most (lowest accuracy first).",
+    defaultBinding: "w",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyRedo",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: redo misses",
+    description: "Re-study the cards you graded again/hard earlier today.",
+    defaultBinding: "r",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyCalibration",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: calibration training",
+    description: "Practice the cards where your predicted rating diverged from the actual.",
+    defaultBinding: "b",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyNew",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: new cards",
+    description: "Learn ahead: drill never-scheduled cards, ignoring the daily new cap.",
+    defaultBinding: "n",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyRandom",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: random cards",
+    description: "Shuffle a random subset of the vault, ignoring the schedule.",
+    defaultBinding: "z",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyPomodoro",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: pomodoro timer",
+    description: "Start a pomodoro focus timer (durations configurable in Settings → Study).",
+    defaultBinding: "p",
     vimOnly: true,
     maxTokens: 1,
   },

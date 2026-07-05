@@ -66,6 +66,8 @@ export interface ZenCapabilities {
   supportsCliInstall: boolean
   /** Custom templates require local-filesystem CRUD; false on web/remote. */
   supportsCustomTemplates: boolean
+  /** OS-notification study reminders live in the Electron main process; false on web. */
+  supportsStudyReminders: boolean
 }
 
 /** Bias the recall/synthesis split of a generation run. */
@@ -260,6 +262,8 @@ export interface ZenBridge {
 
   onVaultChange(cb: (ev: VaultChangeEvent) => void): () => void
   onOpenSettings(cb: () => void): () => void
+  /** Fired when a study reminder notification is clicked (desktop only). */
+  onOpenStudyDashboard(cb: () => void): () => void
   onOpenNoteRequested(cb: (relPath: string) => void): () => void
   notifyRendererReady(): void
   onAppUpdateState(cb: (state: AppUpdateState) => void): () => void

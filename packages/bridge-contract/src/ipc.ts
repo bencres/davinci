@@ -87,6 +87,7 @@ export const IPC = {
   APP_LIST_FONTS: 'app:list-fonts',
   APP_ICON_DATA_URL: 'app:icon-data-url',
   APP_OPEN_SETTINGS: 'app:open-settings',
+  APP_OPEN_STUDY_DASHBOARD: 'app:open-study-dashboard',
   APP_OPEN_NOTE_REQUESTED: 'app:open-note-requested',
   APP_RENDERER_READY: 'app:renderer-ready',
   APP_ZOOM_IN: 'app:zoom-in',
@@ -347,11 +348,39 @@ export interface VaultSettings {
   flashcardNewPerDay?: number
   /** Max review cards scheduled per day in a study session. */
   flashcardMaxReviewsPerDay?: number
+  /**
+   * Which mode "Study anyway" launches when nothing is due — lets a learner keep
+   * a daily habit (drill weak spots, redo misses, learn ahead, …) even with an
+   * empty review queue. Excludes `'due'` (there's nothing scheduled to review).
+   */
+  flashcardDefaultMode?: FlashcardStudyMode
+  /**
+   * Desktop-only study reminders (see `supportsStudyReminders`). Both are
+   * opt-in (default off) and fire at most once per local day at the configured
+   * `HH:MM`, while the app is running.
+   */
+  /** Notify when review cards are due. */
+  flashcardDueReminderEnabled?: boolean
+  /** Local `HH:MM` for the due-cards reminder (default `09:00`). */
+  flashcardDueReminderTime?: string
+  /** Notify in the evening when a streak would break (no reviews yet today). */
+  flashcardStreakReminderEnabled?: boolean
+  /** Local `HH:MM` for the streak reminder (default `19:00`). */
+  flashcardStreakReminderTime?: string
 }
 
 export const DEFAULT_FLASHCARD_MODEL = 'claude-sonnet-4-6'
 export const DEFAULT_FLASHCARD_NEW_PER_DAY = 20
 export const DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY = 200
+export const DEFAULT_FLASHCARD_DUE_REMINDER_TIME = '09:00'
+export const DEFAULT_FLASHCARD_STREAK_REMINDER_TIME = '19:00'
+
+/**
+ * Card-picking modes that make sense when nothing is scheduled (a subset of the
+ * app's full `StudyMode`, minus `'due'`). Used by the "Study anyway" fallback.
+ */
+export type FlashcardStudyMode = 'free' | 'weak' | 'redo' | 'calibration' | 'new'
+export const DEFAULT_FLASHCARD_STUDY_MODE: FlashcardStudyMode = 'free'
 
 /**
  * Default persistent generation guidance. Tuned for the primary use case
@@ -399,7 +428,12 @@ export const DEFAULT_VAULT_SETTINGS: VaultSettings = {
   flashcardDensity: DEFAULT_FLASHCARD_DENSITY,
   flashcardGuidance: DEFAULT_FLASHCARD_GUIDANCE,
   flashcardNewPerDay: DEFAULT_FLASHCARD_NEW_PER_DAY,
-  flashcardMaxReviewsPerDay: DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
+  flashcardMaxReviewsPerDay: DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY,
+  flashcardDefaultMode: DEFAULT_FLASHCARD_STUDY_MODE,
+  flashcardDueReminderEnabled: false,
+  flashcardDueReminderTime: DEFAULT_FLASHCARD_DUE_REMINDER_TIME,
+  flashcardStreakReminderEnabled: false,
+  flashcardStreakReminderTime: DEFAULT_FLASHCARD_STREAK_REMINDER_TIME
 }
 
 export interface NoteMeta {

@@ -184,3 +184,38 @@ export function buildConceptGraph(
   )
   return { nodes, edges, gaps, hasCycle }
 }
+
+/**
+ * The target concept plus all of its transitive prerequisites, ordered
+ * foundational-first (by graph depth). Powers "prerequisite-ordered" study:
+ * shore up what a concept depends on before the concept itself. Matching is by
+ * normalized key; cycles in the free-text prerequisite graph are tolerated via a
+ * visited set. Returns normalized keys; returns just the target when it has no
+ * prerequisites (or isn't in the graph).
+ */
+export function prerequisiteChain(graph: ConceptGraph, targetConcept: string): string[] {
+  const targetKey = conceptKey(targetConcept)
+  if (!targetKey) return []
+  // Backward adjacency: for each concept, the prerequisites pointing into it.
+  const incoming = new Map<string, string[]>()
+  for (const e of graph.edges) {
+    const list = incoming.get(e.to)
+    if (list) list.push(e.from)
+    else incoming.set(e.to, [e.from])
+  }
+  const visited = new Set<string>([targetKey])
+  const stack = [targetKey]
+  while (stack.length > 0) {
+    const key = stack.pop()!
+    for (const from of incoming.get(key) ?? []) {
+      if (!visited.has(from)) {
+        visited.add(from)
+        stack.push(from)
+      }
+    }
+  }
+  const depthOf = new Map(graph.nodes.map((n) => [n.key, n.depth]))
+  return [...visited].sort(
+    (a, b) => (depthOf.get(a) ?? 0) - (depthOf.get(b) ?? 0) || (a < b ? -1 : a > b ? 1 : 0)
+  )
+}

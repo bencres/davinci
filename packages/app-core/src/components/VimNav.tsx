@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { isTagsViewActive, isTasksViewActive, useStore } from '../store'
+import { isTagsViewActive, isTasksViewActive, useStore, FREE_STUDY_DEFAULT_LIMIT } from '../store'
 import { HintOverlay } from './HintOverlay'
 import { WhichKeyOverlay, type WhichKeyItem } from './WhichKeyOverlay'
 import {
@@ -231,6 +231,36 @@ export function VimNav(): JSX.Element | null {
           keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyGraph'),
           label: 'Concept graph',
           detail: 'Open the concept (knowledge) graph: prerequisites, mastery, and gaps.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyWeak'),
+          label: 'Weak spots',
+          detail: 'Drill the cards you struggle with most (lowest accuracy first).'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyRedo'),
+          label: 'Redo misses',
+          detail: 'Re-study the cards you graded again/hard earlier today.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyCalibration'),
+          label: 'Calibration training',
+          detail: 'Practice the cards where your predicted rating diverged from the actual.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyNew'),
+          label: 'New cards',
+          detail: 'Learn ahead: drill never-scheduled cards, ignoring the daily new cap.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyRandom'),
+          label: 'Random cards',
+          detail: 'Shuffle a random subset of the vault, ignoring the schedule.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyPomodoro'),
+          label: 'Pomodoro timer',
+          detail: 'Start a pomodoro focus timer (durations configurable in Settings → Study).'
         }
       ]
     }
@@ -877,6 +907,29 @@ export function VimNav(): JSX.Element | null {
           e.stopImmediatePropagation()
           resetLeader()
           void state.openConceptGraph()
+          return
+        }
+        // Alternative card-picking modes over the whole vault (grade as usual).
+        const startVaultMode = (opts: Parameters<typeof state.startStudySession>[1]): void => {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          void state.startStudySession({ kind: 'all' }, opts)
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyWeak')) return startVaultMode({ mode: 'weak' })
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyRedo')) return startVaultMode({ mode: 'redo' })
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyCalibration')) return startVaultMode({ mode: 'calibration' })
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyNew')) return startVaultMode({ mode: 'new' })
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyRandom')) {
+          return startVaultMode({ mode: 'free', limit: FREE_STUDY_DEFAULT_LIMIT })
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyPomodoro')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          // Start when idle; while running, toggle the overlay's minimized pill.
+          if (state.pomodoro) state.setPomodoroMinimized(!state.pomodoroMinimized)
+          else void state.startPomodoroTimer()
           return
         }
         resetLeader()

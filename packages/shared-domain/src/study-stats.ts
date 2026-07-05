@@ -10,8 +10,9 @@
  */
 
 import type { Flashcard, FlashcardDeck, ReviewGrade, ReviewLogFile } from './flashcards'
-import { ratingToNumber } from './flashcards'
+import { isDeckStale, ratingToNumber } from './flashcards'
 import { isDue, isNew } from './srs'
+import { DEFAULT_POMODORO_CONFIG, normalizePomodoroConfig, type PomodoroConfig } from './pomodoro'
 
 // ---------------------------------------------------------------------------
 // Persisted gamification config (stored at `.zennotes/flashcards/gamification.json`).
@@ -27,6 +28,12 @@ export interface StudyGamification {
   streakFreezes: number
   /** Local `YYYY-MM-DD` dates a freeze was consumed; these bridge a gap in the streak. */
   freezeUsedDates: string[]
+  /** Play a quiet success chime when grading a card good/easy. On by default (opt-out). */
+  soundEnabled: boolean
+  /** Pomodoro focus-timer durations (minutes) and long-break cadence. */
+  pomodoro: PomodoroConfig
+  /** Show an OS notification when a pomodoro phase ends. On by default (opt-out). */
+  pomodoroNotificationsEnabled: boolean
 }
 
 export const DEFAULT_STUDY_DAILY_GOAL = 20
@@ -35,7 +42,10 @@ export const DEFAULT_STUDY_GAMIFICATION: StudyGamification = {
   version: STUDY_GAMIFICATION_VERSION,
   dailyGoal: DEFAULT_STUDY_DAILY_GOAL,
   streakFreezes: 0,
-  freezeUsedDates: []
+  freezeUsedDates: [],
+  soundEnabled: true,
+  pomodoro: DEFAULT_POMODORO_CONFIG,
+  pomodoroNotificationsEnabled: true
 }
 
 /** Coerce arbitrary parsed JSON into a valid `StudyGamification` (defaults on miss). */
@@ -49,7 +59,11 @@ export function normalizeGamification(raw: unknown): StudyGamification {
     streakFreezes: Number.isFinite(freezes) && freezes > 0 ? Math.round(freezes) : 0,
     freezeUsedDates: Array.isArray(obj.freezeUsedDates)
       ? obj.freezeUsedDates.filter((d): d is string => typeof d === 'string')
-      : []
+      : [],
+    // Opt-out: only `false` disables it; missing/invalid defaults to on.
+    soundEnabled: obj.soundEnabled !== false,
+    pomodoro: normalizePomodoroConfig(obj.pomodoro),
+    pomodoroNotificationsEnabled: obj.pomodoroNotificationsEnabled !== false
   }
 }
 
@@ -102,6 +116,82 @@ export interface StudyStats {
   concepts: ConceptMastery[]
   /** Predicted-vs-actual rating calibration over review history. */
   calibration: CalibrationStats
+  /** Repeatedly-lapsed "leech" cards, worst first (see `collectLeeches`). */
+  leeches: LeechInfo[]
+}
+
+// --- Leeches (cards that keep getting forgotten) ---
+
+/** Lapses at which a card counts as a leech (Anki's default threshold region). */
+export const LEECH_LAPSES_THRESHOLD = 4
+
+/** Leech rows returned to the dashboard by default. */
+export const LEECH_DEFAULT_LIMIT = 10
+
+export interface LeechInfo {
+  cardId: string
+  front: string
+  lapses: number
+  /** good+easy / graded for this card over all history (0 when never graded). */
+  accuracy: number
+  sourceNotePath: string
+  /** The card's focus concept (concepts[0]) for a prerequisite-study jump. */
+  focusConcept: string | null
+}
+
+export interface LeechOptions {
+  minLapses?: number
+  limit?: number
+}
+
+/**
+ * Cards that keep being forgotten (`srs.lapses ≥ minLapses`) — usually a badly
+ * formulated card or a missing prerequisite rather than a lazy learner, so the
+ * dashboard surfaces them with repair actions instead of more drilling. Worst
+ * first: most lapses, then lowest accuracy, then lowest stability, then id.
+ */
+export function collectLeeches(
+  decks: FlashcardDeck[],
+  logs: ReviewLogFile[],
+  opts: LeechOptions = {}
+): LeechInfo[] {
+  const minLapses = opts.minLapses ?? LEECH_LAPSES_THRESHOLD
+  const limit = opts.limit ?? LEECH_DEFAULT_LIMIT
+
+  const perCard = new Map<string, { graded: number; correct: number }>()
+  for (const log of logs) {
+    for (const g of log.grades) {
+      const acc = perCard.get(g.cardId) ?? { graded: 0, correct: 0 }
+      acc.graded++
+      if (isCorrect(g.rating)) acc.correct++
+      perCard.set(g.cardId, acc)
+    }
+  }
+
+  const scored: Array<LeechInfo & { stability: number }> = []
+  for (const deck of decks) {
+    for (const card of deck.cards) {
+      if ((card.srs.lapses ?? 0) < minLapses) continue
+      const a = perCard.get(card.id)
+      scored.push({
+        cardId: card.id,
+        front: card.front,
+        lapses: card.srs.lapses,
+        accuracy: a && a.graded > 0 ? a.correct / a.graded : 0,
+        sourceNotePath: deck.sourceNotePath,
+        focusConcept: card.concepts[0] ?? null,
+        stability: card.srs.stability ?? 0
+      })
+    }
+  }
+  scored.sort(
+    (a, b) =>
+      b.lapses - a.lapses ||
+      a.accuracy - b.accuracy ||
+      a.stability - b.stability ||
+      (a.cardId < b.cardId ? -1 : a.cardId > b.cardId ? 1 : 0)
+  )
+  return scored.slice(0, limit).map(({ stability: _stability, ...leech }) => leech)
 }
 
 /** How well a learner's pre-reveal prediction matched the actual self-grade. */
@@ -120,6 +210,45 @@ export const CALIBRATION_RECENT_WINDOW = 100
 
 /** Trailing days to render in the activity heatmap (53 weeks). */
 export const HEATMAP_DAYS = 371
+
+// --- Stale decks (note edited after its cards were authored) ---
+
+export interface StaleDeck {
+  notePath: string
+  cardCount: number
+  /** The note's last edit (ms) — what outran the deck. */
+  noteUpdatedAt: number
+}
+
+/**
+ * Decks whose source note was edited after the deck content was last authored
+ * (see `deckAuthoredAt`), so their cards may no longer reflect the note. Takes a
+ * `noteUpdatedAt` lookup rather than note metadata to stay pure; notes the
+ * lookup doesn't know (deleted/renamed) are skipped. Most recently edited first.
+ */
+export function findStaleDecks(
+  decks: FlashcardDeck[],
+  noteUpdatedAt: (notePath: string) => number | undefined
+): StaleDeck[] {
+  const out: StaleDeck[] = []
+  for (const deck of decks) {
+    if (deck.cards.length === 0) continue
+    const updated = noteUpdatedAt(deck.sourceNotePath)
+    if (updated == null) continue
+    if (isDeckStale(deck, updated)) {
+      out.push({
+        notePath: deck.sourceNotePath,
+        cardCount: deck.cards.length,
+        noteUpdatedAt: updated
+      })
+    }
+  }
+  out.sort(
+    (a, b) =>
+      b.noteUpdatedAt - a.noteUpdatedAt || (a.notePath < b.notePath ? -1 : a.notePath > b.notePath ? 1 : 0)
+  )
+  return out
+}
 
 // --- Local-day helpers (mirror `isSameLocalDay` in flashcards.ts) ---
 
@@ -283,14 +412,17 @@ export function computeConceptMastery(
 }
 
 /**
- * Predicted-vs-actual calibration across review grades. Each grade records the
- * learner's pre-reveal `predictedRating` and the actual `rating`; this measures
- * how close they were (mean absolute error) and which way they lean (signed
- * bias), overall and over the most recent window. Pure and order-independent —
- * grades are sorted by `reviewedAt` internally so the "recent" slice is correct.
+ * Predicted-vs-actual calibration across review grades. Each grade MAY record
+ * the learner's pre-reveal `predictedRating` alongside the actual `rating`;
+ * grades without a prediction are excluded (predicting is optional, and only a
+ * real prediction says anything about calibration). This measures how close the
+ * predictions were (mean absolute error) and which way they lean (signed bias),
+ * overall and over the most recent window. Pure and order-independent — grades
+ * are sorted by `reviewedAt` internally so the "recent" slice is correct.
  */
 export function computeCalibration(grades: ReviewGrade[]): CalibrationStats {
   const rows = grades
+    .filter((g) => g.predictedRating != null)
     .map((g) => ({
       at: Date.parse(g.reviewedAt),
       diff: ratingToNumber(g.predictedRating) - ratingToNumber(g.rating)
@@ -382,6 +514,7 @@ export function computeStudyStats(
     totalReviews,
     heatmap,
     concepts,
-    calibration: computeCalibration(logs.flatMap((l) => l.grades))
+    calibration: computeCalibration(logs.flatMap((l) => l.grades)),
+    leeches: collectLeeches(decks, logs)
   }
 }
