@@ -175,6 +175,7 @@ func (s *Server) registerProtectedRoutes(r chi.Router) {
 	r.Get("/assets/exists", s.assetsExists)
 	r.Get("/assets/raw", s.rawAsset)
 	r.Post("/assets/upload", s.uploadAsset)
+	r.Get("/flashcards/decks", s.listFlashcardDecks)
 
 	r.Get("/notes/read", s.readNote)
 	r.Get("/comments/read", s.readComments)
@@ -515,6 +516,15 @@ func (s *Server) listAssets(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) assetsExists(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"exists": s.currentVault().HasAssetsDir()})
+}
+
+func (s *Server) listFlashcardDecks(w http.ResponseWriter, _ *http.Request) {
+	decks, err := s.currentVault().ListFlashcardDecks()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, decks)
 }
 
 // --- Notes ---

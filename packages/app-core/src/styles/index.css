@@ -120,6 +120,226 @@
 }
 
 /* ===========================================================================
+ * Study reveal/grade "feel" layer
+ * --------------------------------------------------------------------------
+ * One accent vocabulary across the whole study loop, with intensity scaled to
+ * the moment. The compact flashcard (`.study-card`) is the stage: a correct
+ * grade gets a border CIRCUIT + spring POP + background FLOOD; an incorrect
+ * grade a quiet flood; reveal an edge GLOW; predict/rubric a micro POP; every
+ * new card a gentle ENTER. Accent only — never a harsh/red failure read. All
+ * motion is gated on prefers-reduced-motion (the component also skips the
+ * classes entirely then).
+ * ========================================================================= */
+
+/* The flashcard stage. Overlays (circuit/glow) are absolute within it. */
+.study-card {
+  position: relative;
+  transform-origin: center;
+}
+.study-card-overlay {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: 0.85rem;
+}
+
+/* --- Carousel ------------------------------------------------------------- */
+/* A perspective stage: the current question card sits in flow up front, the
+   previous/next cards peek out from behind it on either side, dimmed + shadowed.
+   Advancing rotates the new card into view (see .study-card-rotate-in). */
+.study-carousel {
+  position: relative;
+  perspective: 1500px;
+}
+.study-card-frame {
+  position: relative;
+  z-index: 1;
+}
+.study-peek {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 82%;
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: 0.85rem;
+  border: 1px solid rgb(var(--z-fg) / 0.1);
+  background: rgb(var(--z-fg) / 0.04);
+  padding: 1.1rem;
+  opacity: 0.5;
+  /* blurred so the neighbouring questions can't be read */
+  filter: blur(3px);
+  box-shadow: 0 18px 34px -22px rgb(var(--z-shadow) / 0.55);
+  z-index: 0;
+  transition:
+    transform 450ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 450ms ease-out;
+}
+/* Convex angling — the side cards read as the outward faces of a circular prism
+   (inner edge nearer, outer edge receding), not angled inward like a star. */
+.study-peek--left {
+  left: 0;
+  transform-origin: center;
+  transform: translateX(-46%) rotateY(-40deg) scale(0.84);
+}
+.study-peek--right {
+  right: 0;
+  transform-origin: center;
+  transform: translateX(46%) rotateY(40deg) scale(0.84);
+}
+.study-peek-text {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: rgb(var(--z-fg) / 0.55);
+  white-space: pre-wrap;
+  /* clamp to a few lines and fade the cut-off */
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-mask: linear-gradient(#000 60%, transparent);
+  mask: linear-gradient(#000 60%, transparent);
+}
+
+/* The next card rotating into view as it becomes current. Perspective is baked
+   into the transform so it reads as 3D regardless of ancestor transform-style. */
+.study-card-rotate-in {
+  transform-origin: right center;
+  animation: study-card-rotate-in 440ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes study-card-rotate-in {
+  0% {
+    opacity: 0;
+    transform: perspective(1500px) translateX(44px) rotateY(-26deg) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: perspective(1500px) translateX(0) rotateY(0) scale(1);
+  }
+}
+
+/* New card arriving — a calm fade-in (no bounce) so progressing feels smooth. */
+.study-card-enter {
+  animation: study-card-enter 180ms ease-out both;
+}
+@keyframes study-card-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Win pop — the ONE place we keep a spring, and only a restrained one. Reserved
+   for a correct grade (the most important moment); everything else is bounce-free. */
+.study-card--pop {
+  animation: study-card-pop 360ms cubic-bezier(0.34, 1.32, 0.64, 1) both;
+}
+@keyframes study-card-pop {
+  0% {
+    transform: scale(1);
+  }
+  38% {
+    transform: scale(1.025);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Win: a quiet accent stroke traces the card's border as ONE continuous line.
+   Single SVG <rect> in real pixel space (no viewBox) so the stroke is uniform
+   and `pathLength` normalizes the dash to the perimeter (no dashing artifacts).
+   Toned right down — a thin, low-opacity line with a soft glow. */
+.study-card-circuit {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  /* <rect> strokes start top-left clockwise; rotate 180° to start bottom-right. */
+  transform: rotate(180deg);
+}
+.study-card-circuit rect {
+  fill: none;
+  stroke: rgb(var(--z-accent) / 0.5);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-dasharray: 100;
+  filter:
+    drop-shadow(0 0 3px rgb(var(--z-accent) / 0.45))
+    drop-shadow(0 0 7px rgb(var(--z-accent) / 0.2));
+  animation: study-card-draw 950ms cubic-bezier(0.3, 0, 0.2, 1) both;
+}
+@keyframes study-card-draw {
+  0% {
+    stroke-dashoffset: 100;
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  78% {
+    /* The line has raced all the way around — the circuit is closed. */
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+/* Question ↔ answer swap inside the card — a quick, subtle flip-up as the card's
+   content is replaced (not dropped in below). */
+.study-card-swap {
+  transform-origin: center;
+  animation: study-card-swap 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes study-card-swap {
+  from {
+    opacity: 0;
+    transform: perspective(800px) rotateX(-10deg) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(800px) rotateX(0) translateY(0);
+  }
+}
+
+/* A small upward tick on the in-loop progress count when a win lands. */
+.study-progress-pulse {
+  animation: study-progress-pulse 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes study-progress-pulse {
+  0% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(-2px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .study-card-enter,
+  .study-card--pop,
+  .study-card-rotate-in,
+  .study-card-circuit rect,
+  .study-card-swap,
+  .study-peek,
+  .study-progress-pulse {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* ===========================================================================
  * Gruvbox Material theme tokens
  * --------------------------------------------------------------------------
  * All theme-sensitive colors live here as CSS custom properties using

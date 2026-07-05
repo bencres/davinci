@@ -6,6 +6,10 @@ import {
   DEFAULT_WEEKLY_NOTE_TITLE_PATTERN,
   DEFAULT_WEEKLY_NOTES_DIRECTORY,
   DEFAULT_VAULT_SETTINGS,
+  DEFAULT_FLASHCARD_MODEL,
+  DEFAULT_FLASHCARD_DENSITY,
+  DEFAULT_FLASHCARD_GUIDANCE,
+  type FlashcardDensity,
   type AssetMeta,
   type DateNotePatternSettings,
   type FolderIconId,
@@ -529,8 +533,25 @@ export function normalizeVaultSettings(
     },
     folderIcons: normalizedFolderIcons,
     folderColors: normalizedFolderColors,
-    favorites: normalizedFavorites
+    favorites: normalizedFavorites,
+    flashcardModel:
+      typeof settings?.flashcardModel === 'string' && settings.flashcardModel.trim()
+        ? settings.flashcardModel.trim()
+        : DEFAULT_FLASHCARD_MODEL,
+    flashcardDensity: normalizeFlashcardDensity(settings?.flashcardDensity),
+    // Undefined → seed default; an explicit empty string is a deliberate "none".
+    flashcardGuidance:
+      typeof settings?.flashcardGuidance === 'string'
+        ? settings.flashcardGuidance
+        : DEFAULT_FLASHCARD_GUIDANCE
   }
+}
+
+const FLASHCARD_DENSITIES: readonly FlashcardDensity[] = ['concise', 'balanced', 'thorough']
+function normalizeFlashcardDensity(value: unknown): FlashcardDensity {
+  return (FLASHCARD_DENSITIES as readonly string[]).includes(value as string)
+    ? (value as FlashcardDensity)
+    : DEFAULT_FLASHCARD_DENSITY
 }
 
 export function folderIconKey(folder: NoteFolder, subpath: string): string {

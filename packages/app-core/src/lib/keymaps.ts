@@ -53,6 +53,22 @@ export type KeymapId =
   | "vim.leaderDailyNote"
   | "vim.leaderWeeklyNote"
   | "vim.leaderCalendar"
+  | "vim.leaderStudyGroup"
+  | "vim.leaderStudyQuick"
+  | "vim.leaderStudyCustom"
+  | "vim.leaderStudyManual"
+  | "vim.leaderStudyEdit"
+  | "vim.leaderStudyCrossNote"
+  | "vim.leaderStudyReview"
+  | "vim.leaderStudyReviewNote"
+  | "vim.leaderStudyDashboard"
+  | "vim.leaderStudyGraph"
+  | "vim.leaderStudyWeak"
+  | "vim.leaderStudyRedo"
+  | "vim.leaderStudyCalibration"
+  | "vim.leaderStudyNew"
+  | "vim.leaderStudyRandom"
+  | "vim.leaderStudyPomodoro"
   | "vim.panePrefix"
   | "vim.paneFocusLeft"
   | "vim.paneFocusDown"
@@ -90,7 +106,19 @@ export type KeymapId =
   | "nav.toggleTask"
   | "nav.localEx"
   | "nav.newQuickNote"
-  | "nav.unarchive";
+  | "nav.unarchive"
+  | "flashcards.reviewNext"
+  | "flashcards.reviewPrev"
+  | "flashcards.reviewToggleKeep"
+  | "flashcards.reviewEdit"
+  | "flashcards.reviewRegenerate"
+  | "flashcards.reviewSave"
+  | "study.flip"
+  | "study.rateAgain"
+  | "study.rateHard"
+  | "study.rateGood"
+  | "study.rateEasy"
+  | "study.jumpSource";
 
 export type KeymapOverrides = Partial<Record<KeymapId, string>>;
 
@@ -542,6 +570,182 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     maxTokens: 1,
   },
   {
+    id: "vim.leaderStudyGroup",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Leader: study group",
+    description: "Open the study group — then quick, custom, or manual generation.",
+    defaultBinding: "g",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyQuick",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: quick generate",
+    description: "Generate study cards from the active note with your saved settings.",
+    defaultBinding: "g",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyCustom",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: custom generate",
+    description: "Configure density and custom instructions before generating.",
+    defaultBinding: "c",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyManual",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: manual cards",
+    description: "Hand-author your own study cards for the active note.",
+    defaultBinding: "m",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyEdit",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: edit saved cards",
+    description: "Open the note's saved study cards to edit, delete, or add more.",
+    defaultBinding: "e",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyCrossNote",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: cross-note synthesis",
+    description: "Generate synthesis cards connecting this note to its wiki-linked notes.",
+    defaultBinding: "x",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyReview",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: review due cards",
+    description: "Start a spaced-repetition session over all due cards in the vault.",
+    defaultBinding: "s",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyReviewNote",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: review this note's deck",
+    description: "Start a spaced-repetition session over the active note's deck.",
+    defaultBinding: "h",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyDashboard",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: open dashboard",
+    description: "Open the gamified study dashboard (streak, goal, mastery).",
+    defaultBinding: "d",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyGraph",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: open concept graph",
+    description: "Open the concept (knowledge) graph: prerequisites, mastery, and gaps.",
+    defaultBinding: "k",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyWeak",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: weak spots",
+    description: "Drill the cards you struggle with most (lowest accuracy first).",
+    defaultBinding: "w",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyRedo",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: redo misses",
+    description: "Re-study the cards you graded again/hard earlier today.",
+    defaultBinding: "r",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyCalibration",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: calibration training",
+    description: "Practice the cards where your predicted rating diverged from the actual.",
+    defaultBinding: "b",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyNew",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: new cards",
+    description: "Learn ahead: drill never-scheduled cards, ignoring the daily new cap.",
+    defaultBinding: "n",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyRandom",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: random cards",
+    description: "Shuffle a random subset of the vault, ignoring the schedule.",
+    defaultBinding: "z",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
+    id: "vim.leaderStudyPomodoro",
+    kind: "sequence",
+    scope: "leader",
+    group: "vim",
+    title: "Study group: pomodoro timer",
+    description: "Start a pomodoro focus timer (durations configurable in Settings → Study).",
+    defaultBinding: "p",
+    vimOnly: true,
+    maxTokens: 1,
+  },
+  {
     id: "vim.panePrefix",
     kind: "sequence",
     scope: "pane",
@@ -942,6 +1146,125 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     title: "Unarchive selected note",
     description: "Move the selected archived note back to Inbox.",
     defaultBinding: "u",
+    maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewNext",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study review: next card",
+    description: "Focus the next draft card in the flashcard review.",
+    defaultBinding: "j",
+    maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewPrev",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study review: previous card",
+    description: "Focus the previous draft card in the flashcard review.",
+    defaultBinding: "k",
+    maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewToggleKeep",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study review: keep/discard card",
+    description: "Toggle whether the focused draft card will be saved.",
+    defaultBinding: "x",
+    maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewEdit",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study review: edit card",
+    description: "Edit the focused draft card's fields.",
+    defaultBinding: "e",
+    maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewRegenerate",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study review: regenerate",
+    description: "Re-run Claude generation for this note.",
+    defaultBinding: "r",
+    maxTokens: 1,
+  },
+  {
+    id: "flashcards.reviewSave",
+    kind: "shortcut",
+    scope: "views",
+    group: "view-actions",
+    title: "Study review: save kept cards",
+    description: "Save the kept draft cards to the note's deck.",
+    defaultBinding: "Mod+S",
+  },
+  {
+    id: "study.flip",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study: flip / reveal answer",
+    description: "Reveal the answer (or rubric) for the current study card.",
+    defaultBinding: "Enter",
+    maxTokens: 1,
+  },
+  {
+    id: "study.rateAgain",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study: rate Again",
+    description: "Predict (before reveal) or grade (after reveal) the card as Again.",
+    defaultBinding: "1",
+    maxTokens: 1,
+  },
+  {
+    id: "study.rateHard",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study: rate Hard",
+    description: "Predict (before reveal) or grade (after reveal) the card as Hard.",
+    defaultBinding: "2",
+    maxTokens: 1,
+  },
+  {
+    id: "study.rateGood",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study: rate Good",
+    description: "Predict (before reveal) or grade (after reveal) the card as Good.",
+    defaultBinding: "3",
+    maxTokens: 1,
+  },
+  {
+    id: "study.rateEasy",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study: rate Easy",
+    description: "Predict (before reveal) or grade (after reveal) the card as Easy.",
+    defaultBinding: "4",
+    maxTokens: 1,
+  },
+  {
+    id: "study.jumpSource",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Study: jump to source",
+    description: "Open the source note at the current card's quoted passage.",
+    defaultBinding: "o",
     maxTokens: 1,
   },
 ];

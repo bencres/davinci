@@ -128,6 +128,48 @@ export async function setRemoteWorkspaceSecret(id: string, secret: string | null
   return Boolean(secret && secret.trim())
 }
 
+// ---------------------------------------------------------------------------
+// Generic app secrets (e.g. the Anthropic API key for flashcard generation).
+// Stored under the same service with a distinct, non-prefixed account so they
+// never collide with remote-workspace tokens.
+// ---------------------------------------------------------------------------
+
+const ANTHROPIC_KEY_ACCOUNT = 'anthropic-api-key'
+
+export async function getAnthropicApiKey(): Promise<string | null> {
+  const keytar = await loadKeytar()
+  if (keytar) {
+    return await keytar.getPassword(KEYTAR_SERVICE, ANTHROPIC_KEY_ACCOUNT)
+  }
+  const fallback = await loadFallbackSecrets()
+  const encoded = fallback[ANTHROPIC_KEY_ACCOUNT]
+  return encoded ? decodeSecret(encoded) : null
+}
+
+/** Store the key, or clear it when `key` is empty. Returns true when a key remains. */
+export async function setAnthropicApiKey(key: string | null): Promise<boolean> {
+  const trimmed = key?.trim() ?? ''
+  const keytar = await loadKeytar()
+  if (keytar) {
+    if (trimmed) {
+      await keytar.setPassword(KEYTAR_SERVICE, ANTHROPIC_KEY_ACCOUNT, trimmed)
+    } else {
+      await keytar.deletePassword(KEYTAR_SERVICE, ANTHROPIC_KEY_ACCOUNT)
+    }
+    return Boolean(trimmed)
+  }
+  const fallback = await loadFallbackSecrets()
+  if (trimmed) {
+    const encoded = encodeSecret(trimmed)
+    if (!encoded) return false
+    fallback[ANTHROPIC_KEY_ACCOUNT] = encoded
+  } else {
+    delete fallback[ANTHROPIC_KEY_ACCOUNT]
+  }
+  await saveFallbackSecrets(fallback)
+  return Boolean(trimmed)
+}
+
 export async function deleteRemoteWorkspaceSecret(id: string): Promise<void> {
   const normalizedId = id.trim()
   if (!normalizedId) return

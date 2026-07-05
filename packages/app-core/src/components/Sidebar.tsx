@@ -2,8 +2,10 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import {
   isArchiveViewActive,
   isAssetsViewActive,
+  isConceptGraphActive,
   isHelpViewActive,
   isQuickNotesViewActive,
+  isStudyDashboardActive,
   isTagsViewActive,
   isTasksViewActive,
   isTrashViewActive,
@@ -33,6 +35,7 @@ import {
   FolderPlusIcon,
   NotePlusIcon,
   PanelLeftIcon,
+  GraphIcon,
   PlusIcon,
   SearchIcon,
   SettingsIcon,
@@ -396,6 +399,10 @@ export function Sidebar(): JSX.Element {
   const setView = useStore((s) => s.setView);
   const openTasksView = useStore((s) => s.openTasksView);
   const tasksViewActive = useStore(isTasksViewActive);
+  const openStudyDashboard = useStore((s) => s.openStudyDashboard);
+  const studyDashboardActive = useStore(isStudyDashboardActive);
+  const openConceptGraph = useStore((s) => s.openConceptGraph);
+  const conceptGraphActive = useStore(isConceptGraphActive);
   const openQuickNotesView = useStore((s) => s.openQuickNotesView);
   const quickNotesViewActive = useStore(isQuickNotesViewActive);
   const openHelpView = useStore((s) => s.openHelpView);
@@ -3012,6 +3019,28 @@ export function Sidebar(): JSX.Element {
             sidebarFocused={isSidebarFocused}
           />
 
+          <TaskSidebarRow
+            active={studyDashboardActive}
+            onClick={() => void openStudyDashboard()}
+            label="Study"
+            sidebarType="study"
+            icon={<TargetIcon width={12} height={12} strokeWidth={2.15} />}
+            sidebarIdx={idxCounter.current.value++}
+            vimHighlight={vimCursor === idxCounter.current.value - 1}
+            sidebarFocused={isSidebarFocused}
+          />
+
+          <TaskSidebarRow
+            active={conceptGraphActive}
+            onClick={() => void openConceptGraph()}
+            label="Concept graph"
+            sidebarType="concept-graph"
+            icon={<GraphIcon width={12} height={12} strokeWidth={2.15} />}
+            sidebarIdx={idxCounter.current.value++}
+            vimHighlight={vimCursor === idxCounter.current.value - 1}
+            sidebarFocused={isSidebarFocused}
+          />
+
           <FolderTreeRoot
             label={folderLabels.quick}
             icon={
@@ -4856,6 +4885,8 @@ function TaskSidebarRow({
   sidebarIdx,
   vimHighlight,
   sidebarFocused = false,
+  sidebarType = "tasks",
+  icon,
 }: {
   active: boolean;
   onClick: () => void;
@@ -4863,6 +4894,10 @@ function TaskSidebarRow({
   sidebarIdx?: number;
   vimHighlight?: boolean;
   sidebarFocused?: boolean;
+  /** data-sidebar-type for Vim activation routing (defaults to "tasks"). */
+  sidebarType?: string;
+  /** Leading glyph (defaults to the tasks checkbox). */
+  icon?: JSX.Element;
 }): JSX.Element {
   const strongActive = active && (!sidebarFocused || !!vimHighlight);
   return (
@@ -4892,12 +4927,12 @@ function TaskSidebarRow({
       {...(sidebarIdx != null
         ? {
             "data-sidebar-idx": sidebarIdx,
-            "data-sidebar-type": "tasks",
+            "data-sidebar-type": sidebarType,
           }
         : {})}
     >
       <SidebarGlyph active={strongActive} rowActive={active}>
-        <CheckSquareIcon width={12} height={12} strokeWidth={2.15} />
+        {icon ?? <CheckSquareIcon width={12} height={12} strokeWidth={2.15} />}
       </SidebarGlyph>
       <span className="flex-1 truncate">{label}</span>
     </div>

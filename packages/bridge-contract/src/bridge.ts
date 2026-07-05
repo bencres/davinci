@@ -24,6 +24,7 @@ import type {
   ServerCapabilities,
   ServerSessionStatus,
   VaultSettings,
+  FlashcardDensity,
   TikzRenderResponse,
   VaultChangeEvent,
   VaultDemoTourResult,
@@ -42,6 +43,14 @@ import type {
   DbRow
 } from '@zennotes/shared-domain/databases'
 import type {
+  FlashcardDeck,
+  FlashcardDeckSummary,
+  FlashcardDraft,
+  ReviewGrade,
+  ReviewLogFile
+} from '@zennotes/shared-domain/flashcards'
+import type { StudyGamification } from '@zennotes/shared-domain/study-stats'
+import type {
   McpClientId,
   McpClientStatus,
   McpInstructionsPayload,
@@ -57,6 +66,49 @@ export interface ZenCapabilities {
   supportsCliInstall: boolean
   /** Custom templates require local-filesystem CRUD; false on web/remote. */
   supportsCustomTemplates: boolean
+  /** OS-notification study reminders live in the Electron main process; false on web. */
+  supportsStudyReminders: boolean
+}
+
+/** Bias the recall/synthesis split of a generation run. */
+export type FlashcardCardMix = 'balanced' | 'recall' | 'synthesis'
+
+/** Options for a flashcard-generation request. */
+export interface GenerateOptions {
+  /** Model id; defaults to the vault's configured model (`claude-sonnet-4-6`). */
+  model?: string
+  /** Card-density preference; defaults to the vault's configured density. */
+  density?: FlashcardDensity
+  /**
+   * Cards already created for this note (fronts + focus concepts). The model is
+   * told to produce different, complementary cards — used by "Generate more" and
+   * to avoid re-creating already-saved cards.
+   */
+  existing?: string[]
+  /** Free-text steering appended to the prompt (custom generation). */
+  instructions?: string
+  /**
+   * Persistent generation guidance from vault settings (`flashcardGuidance`).
+   * Applied to every run, separate from the one-off `instructions`.
+   */
+  guidance?: string
+  /** Bias toward recall or synthesis cards; defaults to balanced. */
+  cardMix?: FlashcardCardMix
+  /** Soft target for the number of cards (still clamped to the hard per-run cap). */
+  maxCards?: number
+  /**
+   * Vault-relative paths of related notes (e.g. wiki-linked) whose content is
+   * added as extra context for CROSS-NOTE SYNTHESIS — cards that connect the
+   * primary note's concepts to these. Empty/omitted = single-note generation.
+   */
+  relatedNotePaths?: string[]
+}
+
+/** Result of a flashcard-generation request: validated drafts + drop count. */
+export interface GenerateResult {
+  drafts: FlashcardDraft[]
+  /** How many cards Claude returned that failed `normalizeDraft` and were dropped. */
+  dropped: number
 }
 
 export interface ZenAppInfo {
@@ -148,6 +200,29 @@ export interface ZenBridge {
   /** Create a record's "page" note (returns its vault-relative path). */
   createRecordPage(csvPath: string, title: string, body: string): Promise<string>
   listDatabases(): Promise<DatabaseSummary[]>
+
+  // --- Flashcards (Phase 1) ---
+  /** The saved deck for a note, or null when none exists yet. */
+  readFlashcards(notePath: string): Promise<FlashcardDeck | null>
+  /** Persist a deck for a note (creating `.zennotes/flashcards/…` as needed). */
+  writeFlashcards(notePath: string, deck: FlashcardDeck): Promise<FlashcardDeck>
+  /** Enumerate all decks (path + card count) for the cross-deck index. */
+  listFlashcardDecks(): Promise<FlashcardDeckSummary[]>
+  /** The append-only review-grade log for a note, or null when none exists. */
+  readReviewLog(notePath: string): Promise<ReviewLogFile | null>
+  /** Append one review grade to a note's log (creating it as needed). */
+  appendReviewGrade(notePath: string, grade: ReviewGrade): Promise<ReviewLogFile>
+  /** Read the vault-wide study gamification config (defaults when absent). */
+  readStudyGamification(): Promise<StudyGamification>
+  /** Persist the vault-wide study gamification config, returning the stored value. */
+  writeStudyGamification(gamification: StudyGamification): Promise<StudyGamification>
+  /** Generate draft cards from a note via Claude. Desktop-only in Phase 1. */
+  generateFlashcards(notePath: string, opts: GenerateOptions): Promise<GenerateResult>
+  /** Whether an Anthropic API key is stored (never returns the key itself). */
+  getAnthropicKeyPresent(): Promise<boolean>
+  /** Store (or clear, when empty) the Anthropic API key in the OS secret store. */
+  setAnthropicKey(key: string): Promise<void>
+
   writeNote(relPath: string, body: string): Promise<NoteMeta>
   appendToNote(relPath: string, body: string, position: 'start' | 'end'): Promise<NoteMeta>
   createNote(folder: NoteFolder, title?: string, subpath?: string): Promise<NoteMeta>
@@ -187,6 +262,8 @@ export interface ZenBridge {
 
   onVaultChange(cb: (ev: VaultChangeEvent) => void): () => void
   onOpenSettings(cb: () => void): () => void
+  /** Fired when a study reminder notification is clicked (desktop only). */
+  onOpenStudyDashboard(cb: () => void): () => void
   onOpenNoteRequested(cb: (relPath: string) => void): () => void
   notifyRendererReady(): void
   onAppUpdateState(cb: (state: AppUpdateState) => void): () => void

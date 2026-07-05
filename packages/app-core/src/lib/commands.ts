@@ -6,7 +6,13 @@
  * reflect the store state at that moment (toggle labels flip, context-
  * sensitive commands like "Unarchive" only show up when applicable).
  */
-import { isTagsViewActive, isTasksViewActive, isTrashViewActive, useStore } from '../store'
+import {
+  isTagsViewActive,
+  isTasksViewActive,
+  isTrashViewActive,
+  useStore,
+  FREE_STUDY_DEFAULT_LIMIT
+} from '../store'
 import { confirmApp } from './confirm-requests'
 import { promptApp } from './prompt-requests'
 import { buildMoveNotePrompt, parseMoveNoteTarget } from './move-note'
@@ -19,6 +25,7 @@ import { dispatchKeyboardContextMenu, findTabContextMenuTarget } from './keyboar
 import { resolveSystemFolderLabels } from './system-folder-labels'
 import { normalizeVaultSettings } from './vault-layout'
 import { DEMO_TOUR_START_PATH } from '@shared/demo-tour'
+import { FEEDBACK_LAB_TAB_PATH } from '@shared/flashcards' // TEMP(feedback-lab)
 
 const APP_WEBSITE_URL = 'https://zennotes.org'
 const APP_DISCORD_URL = 'https://discord.gg/W4fWzapKS6'
@@ -187,6 +194,191 @@ export function buildCommands(options?: { includeUnavailable?: boolean }): Comma
       keywords: 'template save custom create from note',
       when: () => !!getState().activeNote,
       run: () => getState().saveActiveNoteAsTemplate()
+    },
+    {
+      id: 'flashcards.generate.quick',
+      title: 'Study: Quick Generate Cards from This Note',
+      category: 'Note',
+      keywords: 'study flashcard learn anki srs quiz recall spaced repetition quick generate',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyQuick')}`,
+      when: () => !!getState().activeNote,
+      run: async () => {
+        const s = getState()
+        if (!s.activeNote) return
+        await s.openFlashcardReview(s.activeNote.path, 'quick')
+      }
+    },
+    {
+      id: 'flashcards.generate.custom',
+      title: 'Study: Custom Generate Cards…',
+      category: 'Note',
+      keywords: 'study flashcard custom density instructions options generate',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyCustom')}`,
+      when: () => !!getState().activeNote,
+      run: async () => {
+        const s = getState()
+        if (!s.activeNote) return
+        await s.openFlashcardReview(s.activeNote.path, 'custom')
+      }
+    },
+    {
+      id: 'flashcards.generate.manual',
+      title: 'Study: Add Cards Manually',
+      category: 'Note',
+      keywords: 'study flashcard manual hand author create own card',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyManual')}`,
+      when: () => !!getState().activeNote,
+      run: async () => {
+        const s = getState()
+        if (!s.activeNote) return
+        await s.openFlashcardReview(s.activeNote.path, 'manual')
+      }
+    },
+    {
+      id: 'flashcards.edit',
+      title: 'Study: Edit Saved Cards for This Note',
+      category: 'Note',
+      keywords: 'study flashcard edit modify delete saved deck cards revise',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyEdit')}`,
+      when: () => !!getState().activeNote,
+      run: async () => {
+        const s = getState()
+        if (!s.activeNote) return
+        await s.openFlashcardReview(s.activeNote.path, 'edit')
+      }
+    },
+    {
+      id: 'study.global',
+      title: 'Study: Review Due Cards (All Decks)',
+      category: 'Note',
+      keywords: 'study review due cards spaced repetition srs fsrs anki flashcard quiz learn',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyReview')}`,
+      run: async () => {
+        await getState().startStudySession({ kind: 'all' })
+      }
+    },
+    {
+      id: 'study.note',
+      title: "Study: Review This Note's Deck",
+      category: 'Note',
+      keywords: 'study review note deck due cards spaced repetition srs fsrs flashcard',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyReviewNote')}`,
+      when: () => !!getState().activeNote,
+      run: async () => {
+        const s = getState()
+        if (!s.activeNote) return
+        await s.startStudySession({ kind: 'note', notePath: s.activeNote.path })
+      }
+    },
+    {
+      id: 'study.weakSpots',
+      title: 'Study: Weak Spots (Lowest Accuracy)',
+      category: 'Note',
+      keywords: 'study weak spots struggle lowest accuracy lapses hard difficult review practice flashcard',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyWeak')}`,
+      run: async () => {
+        await getState().startStudySession({ kind: 'all' }, { mode: 'weak' })
+      }
+    },
+    {
+      id: 'study.redoMisses',
+      title: "Study: Redo Today's Misses",
+      category: 'Note',
+      keywords: 'study redo misses again hard failed wrong today retry practice flashcard',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyRedo')}`,
+      run: async () => {
+        await getState().startStudySession({ kind: 'all' }, { mode: 'redo' })
+      }
+    },
+    {
+      id: 'study.calibration',
+      title: 'Study: Calibration Training',
+      category: 'Note',
+      keywords: 'study calibration predict confidence miscalibrated overconfident metacognition practice flashcard',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyCalibration')}`,
+      run: async () => {
+        await getState().startStudySession({ kind: 'all' }, { mode: 'calibration' })
+      }
+    },
+    {
+      id: 'study.newOnly',
+      title: 'Study: New Cards (Learn Ahead)',
+      category: 'Note',
+      keywords: 'study new cards unseen learn ahead fresh ignore cap introduce flashcard',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyNew')}`,
+      run: async () => {
+        await getState().startStudySession({ kind: 'all' }, { mode: 'new' })
+      }
+    },
+    {
+      id: 'study.random',
+      title: 'Study: Random Cards (Ignore Schedule)',
+      category: 'Note',
+      keywords: 'study random shuffle free cram ignore schedule practice anytime flashcard',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyRandom')}`,
+      run: async () => {
+        await getState().startStudySession({ kind: 'all' }, { mode: 'free', limit: FREE_STUDY_DEFAULT_LIMIT })
+      }
+    },
+    {
+      id: 'study.dashboard',
+      title: 'Study: Open Dashboard',
+      category: 'Note',
+      keywords: 'study dashboard streak goal heatmap mastery progress gamify stats home hub spaced repetition flashcard',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyDashboard')}`,
+      run: async () => {
+        await getState().openStudyDashboard()
+      }
+    },
+    {
+      id: 'study.pomodoroStart',
+      title: 'Study: Start Pomodoro Timer',
+      category: 'Note',
+      keywords: 'pomodoro timer focus break tomato session time box concentrate deep work',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyPomodoro')}`,
+      when: () => !getState().pomodoro,
+      run: () => getState().startPomodoroTimer()
+    },
+    {
+      id: 'study.pomodoroStop',
+      title: 'Study: Stop Pomodoro Timer',
+      category: 'Note',
+      keywords: 'pomodoro timer stop end cancel quit focus break',
+      when: () => !!getState().pomodoro,
+      run: () => getState().stopPomodoroTimer()
+    },
+    {
+      id: 'study.crossNote',
+      title: 'Study: Generate Cross-Note Synthesis Cards',
+      category: 'Note',
+      keywords: 'study cross note synthesis generate flashcard wikilink related connect concepts transfer',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyCrossNote')}`,
+      when: () => !!getState().activeNote,
+      run: async () => {
+        const s = getState()
+        if (!s.activeNote) return
+        await s.openFlashcardReview(s.activeNote.path, 'cross')
+      }
+    },
+    {
+      id: 'study.graph',
+      title: 'Study: Open Concept Graph',
+      category: 'Note',
+      keywords: 'study concept knowledge graph prerequisite dependency map mastery gaps spaced repetition flashcard',
+      shortcut: `${leaderShortcut('vim.leaderStudyGroup')} ${shortcut('vim.leaderStudyGraph')}`,
+      run: async () => {
+        await getState().openConceptGraph()
+      }
+    },
+    {
+      // TEMP(feedback-lab): scratch playground for grade-feedback patterns.
+      id: 'study.feedbackLab',
+      title: 'Study: Open Feedback Lab (temp)',
+      category: 'Note',
+      keywords: 'feedback lab celebration animation sound test playground grade win temp scratch experiment',
+      run: async () => {
+        await getState().openNoteInPane(getState().activePaneId, FEEDBACK_LAB_TAB_PATH)
+      }
     },
     {
       id: 'note.new.here',

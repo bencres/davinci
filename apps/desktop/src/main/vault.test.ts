@@ -29,6 +29,7 @@ import {
   unarchiveNote,
   writeNote
 } from './vault'
+import { DEFAULT_FLASHCARD_GUIDANCE } from '@shared/ipc'
 
 const tempDirs: string[] = []
 
@@ -68,6 +69,55 @@ describe('rootContentHiddenByInboxMode (#195)', () => {
     const base = await getVaultSettings(root)
     await setVaultSettings(root, { ...base, primaryNotesLocation: 'inbox' })
     expect(await rootContentHiddenByInboxMode(root)).toBe(false)
+  })
+})
+
+describe('vault settings flashcard model round-trip', () => {
+  it('persists a chosen flashcardModel + flashcardDensity through set + get', async () => {
+    const root = await makeTempDir('zennotes-vault-flashcard-')
+    await mkdir(root, { recursive: true })
+    const base = await getVaultSettings(root)
+    const saved = await setVaultSettings(root, {
+      ...base,
+      flashcardModel: 'claude-haiku-4-5',
+      flashcardDensity: 'thorough'
+    })
+    expect(saved.flashcardModel).toBe('claude-haiku-4-5')
+    expect(saved.flashcardDensity).toBe('thorough')
+    const reread = await getVaultSettings(root)
+    expect(reread.flashcardModel).toBe('claude-haiku-4-5')
+    expect(reread.flashcardDensity).toBe('thorough')
+  })
+
+  it('defaults flashcardModel + flashcardDensity when unset/invalid', async () => {
+    const root = await makeTempDir('zennotes-vault-flashcard-default-')
+    await mkdir(root, { recursive: true })
+    const settings = await getVaultSettings(root)
+    expect(settings.flashcardModel).toBe('claude-sonnet-4-6')
+    expect(settings.flashcardDensity).toBe('balanced')
+    // An invalid density falls back to the default.
+    const saved = await setVaultSettings(root, {
+      ...settings,
+      flashcardDensity: 'bogus' as never
+    })
+    expect(saved.flashcardDensity).toBe('balanced')
+  })
+
+  it('persists custom flashcardGuidance, defaults when unset, and keeps an explicit empty', async () => {
+    const root = await makeTempDir('zennotes-vault-flashcard-guidance-')
+    await mkdir(root, { recursive: true })
+    // Unset → seeded with the default guidance (non-empty).
+    const base = await getVaultSettings(root)
+    expect(base.flashcardGuidance).toBe(DEFAULT_FLASHCARD_GUIDANCE)
+    // A custom string round-trips verbatim.
+    const custom = 'Focus on database internals; ask interview-style questions.'
+    const saved = await setVaultSettings(root, { ...base, flashcardGuidance: custom })
+    expect(saved.flashcardGuidance).toBe(custom)
+    expect((await getVaultSettings(root)).flashcardGuidance).toBe(custom)
+    // An explicit empty string is preserved (a deliberate "no standing guidance").
+    const cleared = await setVaultSettings(root, { ...base, flashcardGuidance: '' })
+    expect(cleared.flashcardGuidance).toBe('')
+    expect((await getVaultSettings(root)).flashcardGuidance).toBe('')
   })
 })
 

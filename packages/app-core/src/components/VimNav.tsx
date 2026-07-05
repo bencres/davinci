@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { isTagsViewActive, isTasksViewActive, useStore } from '../store'
+import { isTagsViewActive, isTasksViewActive, useStore, FREE_STUDY_DEFAULT_LIMIT } from '../store'
 import { HintOverlay } from './HintOverlay'
 import { WhichKeyOverlay, type WhichKeyItem } from './WhichKeyOverlay'
 import {
@@ -54,7 +54,7 @@ export function VimNav(): JSX.Element | null {
   const jumpTopPending = useRef(0)
   const previousBufferPending = useRef(0)
   const nextBufferPending = useRef(0)
-  const leaderPending = useRef<'leader' | 'leader-l' | 'leader-s' | null>(null)
+  const leaderPending = useRef<'leader' | 'leader-l' | 'leader-s' | 'leader-g' | null>(null)
   const ctrlWTimer = useRef<ReturnType<typeof setTimeout>>()
   const jumpTopTimer = useRef<ReturnType<typeof setTimeout>>()
   const previousBufferTimer = useRef<ReturnType<typeof setTimeout>>()
@@ -64,7 +64,7 @@ export function VimNav(): JSX.Element | null {
   // Hint mode needs a render (to mount HintOverlay), so it's state.
   const [hintActive, setHintActive] = useState(false)
   const [whichKeyState, setWhichKeyState] = useState<{
-    stage: 'leader' | 'leader-l' | 'leader-s'
+    stage: 'leader' | 'leader-l' | 'leader-s' | 'leader-g'
     allowEditorActions: boolean
   } | null>(null)
   const hintRef = useRef(false)
@@ -141,7 +141,7 @@ export function VimNav(): JSX.Element | null {
     setWhichKeyState(null)
   }, [])
   const armLeader = useCallback(
-    (stage: 'leader' | 'leader-l' | 'leader-s', allowEditorActions: boolean) => {
+    (stage: 'leader' | 'leader-l' | 'leader-s' | 'leader-g', allowEditorActions: boolean) => {
       leaderPending.current = stage
       setWhichKeyState({ stage, allowEditorActions })
       if (leaderTimer.current) clearTimeout(leaderTimer.current)
@@ -182,6 +182,85 @@ export function VimNav(): JSX.Element | null {
           keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderSearchVaultText'),
           label: 'Search vault text',
           detail: 'Fuzzy-search note contents across the vault.'
+        }
+      ]
+    }
+    if (whichKeyState.stage === 'leader-g') {
+      return [
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyQuick'),
+          label: 'Quick generate',
+          detail: 'Generate study cards using your saved settings.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyCustom'),
+          label: 'Custom generate',
+          detail: 'Set density and custom instructions before generating.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyManual'),
+          label: 'Manual cards',
+          detail: 'Hand-author your own study cards.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyEdit'),
+          label: 'Edit saved cards',
+          detail: "Open the note's saved cards to edit, delete, or add more."
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyCrossNote'),
+          label: 'Cross-note synthesis',
+          detail: "Generate cards connecting this note to its wiki-linked notes."
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyReview'),
+          label: 'Start study session',
+          detail: 'Start a spaced-repetition session over all due cards in the vault.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyReviewNote'),
+          label: "Review this note's deck",
+          detail: "Study just the active note's due cards."
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyDashboard'),
+          label: 'Open dashboard',
+          detail: 'Open the gamified study dashboard (streak, goal, mastery).'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyGraph'),
+          label: 'Concept graph',
+          detail: 'Open the concept (knowledge) graph: prerequisites, mastery, and gaps.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyWeak'),
+          label: 'Weak spots',
+          detail: 'Drill the cards you struggle with most (lowest accuracy first).'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyRedo'),
+          label: 'Redo misses',
+          detail: 'Re-study the cards you graded again/hard earlier today.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyCalibration'),
+          label: 'Calibration training',
+          detail: 'Practice the cards where your predicted rating diverged from the actual.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyNew'),
+          label: 'New cards',
+          detail: 'Learn ahead: drill never-scheduled cards, ignoring the daily new cap.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyRandom'),
+          label: 'Random cards',
+          detail: 'Shuffle a random subset of the vault, ignoring the schedule.'
+        },
+        {
+          keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyPomodoro'),
+          label: 'Pomodoro timer',
+          detail: 'Start a pomodoro focus timer (durations configurable in Settings → Study).'
         }
       ]
     }
@@ -255,6 +334,11 @@ export function VimNav(): JSX.Element | null {
         keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderCalendar'),
         label: 'Toggle calendar',
         detail: 'Show or hide the calendar for the active daily/weekly note.'
+      },
+      {
+        keyLabel: getKeymapDisplay(keymapOverrides, 'vim.leaderStudyGroup'),
+        label: 'Study…',
+        detail: 'Open the study group — quick, custom, or manual generation.'
       }
     ]
     if (whichKeyState.allowEditorActions) {
@@ -592,7 +676,10 @@ export function VimNav(): JSX.Element | null {
         return
       }
 
-      // Cancel a pending leader sequence on Escape or a second leader press.
+      // Cancel a pending leader sequence on Escape, or — when the leaderToggle
+      // setting is on — on a second leader press (so Space opens then closes the
+      // leader overlay). With it off, a second leader press falls through and
+      // re-arms the leader below instead.
       if (leaderPending.current && e.key === 'Escape') {
         e.preventDefault()
         e.stopImmediatePropagation()
@@ -600,6 +687,7 @@ export function VimNav(): JSX.Element | null {
         return
       }
       if (
+        state.leaderToggle &&
         leaderPending.current &&
         sequenceTokenFromEvent(e) === leaderToken
       ) {
@@ -734,6 +822,12 @@ export function VimNav(): JSX.Element | null {
           window.dispatchEvent(new Event('zen:toggle-calendar'))
           return
         }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyGroup')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          armLeader('leader-g', editorNormalMode)
+          return
+        }
         // Any other key cancels leader and falls through to normal routing.
         resetLeader()
       }
@@ -769,6 +863,73 @@ export function VimNav(): JSX.Element | null {
           e.stopImmediatePropagation()
           resetLeader()
           state.setVaultTextSearchOpen(true)
+          return
+        }
+        resetLeader()
+      }
+
+      if (leaderPending.current === 'leader-g') {
+        const active = state.activeNote
+        const openStudy = (mode: 'quick' | 'custom' | 'manual' | 'edit' | 'cross'): void => {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          if (active) void state.openFlashcardReview(active.path, mode)
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyQuick')) return openStudy('quick')
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyCustom')) return openStudy('custom')
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyManual')) return openStudy('manual')
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyEdit')) return openStudy('edit')
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyCrossNote')) return openStudy('cross')
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyReview')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          void state.startStudySession({ kind: 'all' })
+          return
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyReviewNote')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          if (active) void state.startStudySession({ kind: 'note', notePath: active.path })
+          return
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyDashboard')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          void state.openStudyDashboard()
+          return
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyGraph')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          void state.openConceptGraph()
+          return
+        }
+        // Alternative card-picking modes over the whole vault (grade as usual).
+        const startVaultMode = (opts: Parameters<typeof state.startStudySession>[1]): void => {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          void state.startStudySession({ kind: 'all' }, opts)
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyWeak')) return startVaultMode({ mode: 'weak' })
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyRedo')) return startVaultMode({ mode: 'redo' })
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyCalibration')) return startVaultMode({ mode: 'calibration' })
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyNew')) return startVaultMode({ mode: 'new' })
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyRandom')) {
+          return startVaultMode({ mode: 'free', limit: FREE_STUDY_DEFAULT_LIMIT })
+        }
+        if (matchesSequenceToken(e, overrides, 'vim.leaderStudyPomodoro')) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          resetLeader()
+          // Start when idle; while running, toggle the overlay's minimized pill.
+          if (state.pomodoro) state.setPomodoroMinimized(!state.pomodoroMinimized)
+          else void state.startPomodoroTimer()
           return
         }
         resetLeader()
@@ -1810,6 +1971,11 @@ export function VimNav(): JSX.Element | null {
       // Tasks is a top-level sidebar row that opens the vault-wide Tasks
       // tab in the active pane. Matches clicking the row.
       void state.openTasksView()
+    } else if (itemType === 'study') {
+      // Study row opens the gamified study dashboard. Matches clicking the row.
+      void state.openStudyDashboard()
+    } else if (itemType === 'concept-graph') {
+      void state.openConceptGraph()
     } else if (itemType === 'help') {
       void state.openHelpView()
     } else if (itemType === 'settings') {
@@ -1936,8 +2102,13 @@ export function VimNav(): JSX.Element | null {
     const leaderDisplay = getKeymapDisplay(keymapOverrides, 'vim.leaderPrefix')
     const noteActionsDisplay = getKeymapDisplay(keymapOverrides, 'vim.leaderNoteActions')
     const searchGroupDisplay = getKeymapDisplay(keymapOverrides, 'vim.leaderSearchGroup')
+    const studyGroupDisplay = getKeymapDisplay(keymapOverrides, 'vim.leaderStudyGroup')
     const subPrefix =
-      whichKeyState.stage === 'leader-s' ? searchGroupDisplay : noteActionsDisplay
+      whichKeyState.stage === 'leader-s'
+        ? searchGroupDisplay
+        : whichKeyState.stage === 'leader-g'
+          ? studyGroupDisplay
+          : noteActionsDisplay
     return (
       <WhichKeyOverlay
         prefix={whichKeyState.stage === 'leader' ? leaderDisplay : `${leaderDisplay} ${subPrefix}`}
@@ -1946,7 +2117,9 @@ export function VimNav(): JSX.Element | null {
             ? 'Leader'
             : whichKeyState.stage === 'leader-s'
               ? 'Leader · Search'
-              : 'Leader · Note Actions'
+              : whichKeyState.stage === 'leader-g'
+                ? 'Leader · Study'
+                : 'Leader · Note Actions'
         }
         detail={
           stickyWhichKeyHints

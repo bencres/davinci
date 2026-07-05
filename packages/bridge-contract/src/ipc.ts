@@ -74,9 +74,20 @@ export const IPC = {
   VAULT_RENAME_DATABASE: 'vault:rename-database',
   VAULT_CREATE_RECORD_PAGE: 'vault:create-record-page',
   VAULT_LIST_DATABASES: 'vault:list-databases',
+  VAULT_READ_FLASHCARDS: 'vault:read-flashcards',
+  VAULT_WRITE_FLASHCARDS: 'vault:write-flashcards',
+  VAULT_LIST_FLASHCARDS: 'vault:list-flashcards',
+  VAULT_READ_REVIEW_LOG: 'vault:read-review-log',
+  VAULT_APPEND_REVIEW_GRADE: 'vault:append-review-grade',
+  VAULT_READ_STUDY_GAMIFICATION: 'vault:read-study-gamification',
+  VAULT_WRITE_STUDY_GAMIFICATION: 'vault:write-study-gamification',
+  AI_GENERATE_FLASHCARDS: 'ai:generate-flashcards',
+  AI_GET_ANTHROPIC_KEY_PRESENT: 'ai:get-anthropic-key-present',
+  AI_SET_ANTHROPIC_KEY: 'ai:set-anthropic-key',
   APP_LIST_FONTS: 'app:list-fonts',
   APP_ICON_DATA_URL: 'app:icon-data-url',
   APP_OPEN_SETTINGS: 'app:open-settings',
+  APP_OPEN_STUDY_DASHBOARD: 'app:open-study-dashboard',
   APP_OPEN_NOTE_REQUESTED: 'app:open-note-requested',
   APP_RENDERER_READY: 'app:renderer-ready',
   APP_ZOOM_IN: 'app:zoom-in',
@@ -323,7 +334,69 @@ export interface VaultSettings {
    * distinguishable. Order is the display order in the Favorites section.
    */
   favorites: string[]
+  /** Anthropic model used for flashcard generation (default `claude-sonnet-4-6`). */
+  flashcardModel?: string
+  /** How many cards to aim for per note — drives the generation prompt. */
+  flashcardDensity?: FlashcardDensity
+  /**
+   * Persistent, user-editable steer merged into every generation prompt (in
+   * addition to any per-run custom instructions). Seeded with `DEFAULT_FLASHCARD_GUIDANCE`
+   * so domain emphasis is editable data, not a hardcoded branch.
+   */
+  flashcardGuidance?: string
+  /** Max NEW cards introduced per day in a study session (Anki-style). */
+  flashcardNewPerDay?: number
+  /** Max review cards scheduled per day in a study session. */
+  flashcardMaxReviewsPerDay?: number
+  /**
+   * Which mode "Study anyway" launches when nothing is due — lets a learner keep
+   * a daily habit (drill weak spots, redo misses, learn ahead, …) even with an
+   * empty review queue. Excludes `'due'` (there's nothing scheduled to review).
+   */
+  flashcardDefaultMode?: FlashcardStudyMode
+  /**
+   * Desktop-only study reminders (see `supportsStudyReminders`). Both are
+   * opt-in (default off) and fire at most once per local day at the configured
+   * `HH:MM`, while the app is running.
+   */
+  /** Notify when review cards are due. */
+  flashcardDueReminderEnabled?: boolean
+  /** Local `HH:MM` for the due-cards reminder (default `09:00`). */
+  flashcardDueReminderTime?: string
+  /** Notify in the evening when a streak would break (no reviews yet today). */
+  flashcardStreakReminderEnabled?: boolean
+  /** Local `HH:MM` for the streak reminder (default `19:00`). */
+  flashcardStreakReminderTime?: string
 }
+
+export const DEFAULT_FLASHCARD_MODEL = 'claude-sonnet-4-6'
+export const DEFAULT_FLASHCARD_NEW_PER_DAY = 20
+export const DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY = 200
+export const DEFAULT_FLASHCARD_DUE_REMINDER_TIME = '09:00'
+export const DEFAULT_FLASHCARD_STREAK_REMINDER_TIME = '19:00'
+
+/**
+ * Card-picking modes that make sense when nothing is scheduled (a subset of the
+ * app's full `StudyMode`, minus `'due'`). Used by the "Study anyway" fallback.
+ */
+export type FlashcardStudyMode = 'free' | 'weak' | 'redo' | 'calibration' | 'new'
+export const DEFAULT_FLASHCARD_STUDY_MODE: FlashcardStudyMode = 'free'
+
+/**
+ * Default persistent generation guidance. Tuned for the primary use case
+ * (growing software-engineering depth), but fully editable in Settings → Study.
+ */
+export const DEFAULT_FLASHCARD_GUIDANCE =
+  'For computer-science / software-engineering material, prefer synthesis cards framed as real-world application, production & operational scenarios, systems-design and architecture trade-offs, or senior-level technical-interview questions — whichever best fits the concept. Aim for senior-engineer depth: trade-offs, failure modes, and behavior at scale.'
+
+/**
+ * Card-density preference for generation. `concise` tests only the most
+ * essential concepts; `thorough` covers every distinct concept. The "right"
+ * number is driven by the note's atomic concepts, not its length — this just
+ * shifts the selectivity threshold.
+ */
+export type FlashcardDensity = 'concise' | 'balanced' | 'thorough'
+export const DEFAULT_FLASHCARD_DENSITY: FlashcardDensity = 'balanced'
 
 export const DEFAULT_DAILY_NOTES_DIRECTORY = 'Daily Notes'
 export const DEFAULT_DAILY_NOTE_TITLE_PATTERN = 'yyyy-MM-dd'
@@ -350,7 +423,17 @@ export const DEFAULT_VAULT_SETTINGS: VaultSettings = {
   },
   folderIcons: {},
   folderColors: {},
-  favorites: []
+  favorites: [],
+  flashcardModel: DEFAULT_FLASHCARD_MODEL,
+  flashcardDensity: DEFAULT_FLASHCARD_DENSITY,
+  flashcardGuidance: DEFAULT_FLASHCARD_GUIDANCE,
+  flashcardNewPerDay: DEFAULT_FLASHCARD_NEW_PER_DAY,
+  flashcardMaxReviewsPerDay: DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY,
+  flashcardDefaultMode: DEFAULT_FLASHCARD_STUDY_MODE,
+  flashcardDueReminderEnabled: false,
+  flashcardDueReminderTime: DEFAULT_FLASHCARD_DUE_REMINDER_TIME,
+  flashcardStreakReminderEnabled: false,
+  flashcardStreakReminderTime: DEFAULT_FLASHCARD_STREAK_REMINDER_TIME
 }
 
 export interface NoteMeta {

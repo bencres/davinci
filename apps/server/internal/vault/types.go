@@ -145,6 +145,13 @@ type AssetMeta struct {
 	UpdatedAt    int64  `json:"updatedAt"`
 }
 
+// FlashcardDeckSummary — mirrors shared/flashcards.ts FlashcardDeckSummary.
+type FlashcardDeckSummary struct {
+	SourceNotePath string `json:"sourceNotePath"`
+	DeckPath       string `json:"deckPath"`
+	CardCount      int    `json:"cardCount"`
+}
+
 // ImportedAsset — mirrors shared/ipc.ts ImportedAsset.
 type ImportedAsset struct {
 	Name     string `json:"name"`

@@ -99,6 +99,11 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { promptApp } from '../lib/prompt-requests'
 import { TasksView } from './TasksView'
 import { DatabaseView } from './DatabaseView'
+import { FlashcardReviewView } from './FlashcardReviewView'
+import { StudyView } from './StudyView'
+import { StudyDashboard } from './StudyDashboard'
+import { ConceptGraphView } from './ConceptGraphView'
+import { FeedbackLab } from './FeedbackLab' // TEMP(feedback-lab)
 import { LazyExcalidrawView } from './LazyExcalidrawView'
 import { isExcalidrawPath } from '@shared/excalidraw'
 import { TagView } from './TagView'
@@ -109,6 +114,15 @@ import { AssetsView } from './AssetsView'
 import { QuickNotesView } from './QuickNotesView'
 import { isTasksTabPath } from '@shared/tasks'
 import { isDatabaseTabPath, databaseTitleFromTab, databaseTabPath, isDatabaseCsvPath } from '@shared/databases'
+import {
+  isFlashcardsTabPath,
+  flashcardsTitleFromTab,
+  isStudyTabPath,
+  isStudyDashboardTabPath,
+  isConceptGraphTabPath,
+  isFeedbackLabTabPath, // TEMP(feedback-lab)
+  studyTitleFromTab
+} from '@shared/flashcards'
 import { isTagsTabPath } from '@shared/tags'
 import { isHelpTabPath } from '@shared/help'
 import { isArchiveTabPath } from '@shared/archive'
@@ -2282,7 +2296,9 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
           isAssetsView: false,
           isAsset: false,
           isDiagram: false,
-          isDatabase: false
+          isDatabase: false,
+          isFlashcards: false,
+          isStudy: false
         }
         if (isTasksTabPath(path)) {
           return {
@@ -2353,6 +2369,42 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             ...base,
             title: databaseTitleFromTab(path),
             isDatabase: true
+          }
+        }
+        if (isFlashcardsTabPath(path)) {
+          return {
+            ...base,
+            title: `Study · ${flashcardsTitleFromTab(path)}`,
+            isFlashcards: true
+          }
+        }
+        if (isStudyDashboardTabPath(path)) {
+          return {
+            ...base,
+            title: 'Study Dashboard',
+            isStudy: true
+          }
+        }
+        if (isConceptGraphTabPath(path)) {
+          return {
+            ...base,
+            title: 'Concept graph',
+            isStudy: true
+          }
+        }
+        if (isFeedbackLabTabPath(path)) {
+          // TEMP(feedback-lab)
+          return {
+            ...base,
+            title: 'Feedback Lab',
+            isStudy: true
+          }
+        }
+        if (isStudyTabPath(path)) {
+          return {
+            ...base,
+            title: studyTitleFromTab(path),
+            isStudy: true
           }
         }
         const meta = path === content?.path ? content : notes.find((n) => n.path === path)
@@ -2431,7 +2483,11 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
       isTrashTabPath(path) ||
       isAssetTabPath(path) ||
       isDiagramTabPath(path) ||
-      isDatabaseTabPath(path)
+      isDatabaseTabPath(path) ||
+      isFlashcardsTabPath(path) ||
+      isStudyTabPath(path) ||
+      isStudyDashboardTabPath(path) ||
+      isConceptGraphTabPath(path)
     ) {
       return [
         { label: 'Close', onSelect: async () => closeTabInPane(paneId, path) },
@@ -3242,6 +3298,16 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             <LazyDiagramTabView diagram={diagramFromTabPath(activeTab)} />
           ) : activeTab && isDatabaseTabPath(activeTab) ? (
             <DatabaseView tabPath={activeTab} isActive={isActive} />
+          ) : activeTab && isFlashcardsTabPath(activeTab) ? (
+            <FlashcardReviewView tabPath={activeTab} isActive={isActive} />
+          ) : activeTab && isStudyTabPath(activeTab) ? (
+            <StudyView tabPath={activeTab} isActive={isActive} />
+          ) : isStudyDashboardTabPath(activeTab) ? (
+            <StudyDashboard isActive={isActive} />
+          ) : isConceptGraphTabPath(activeTab) ? (
+            <ConceptGraphView isActive={isActive} />
+          ) : isFeedbackLabTabPath(activeTab) ? ( // TEMP(feedback-lab)
+            <FeedbackLab />
           ) : activeTab && isExcalidrawPath(activeTab) ? (
             <LazyExcalidrawView path={activeTab} />
           ) : content ? (

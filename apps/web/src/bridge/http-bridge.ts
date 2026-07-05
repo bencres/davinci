@@ -86,6 +86,21 @@ import type {
   McpInstructionsPayload,
   McpServerRuntime
 } from '@shared/mcp-clients'
+import {
+  appendReviewGrade as appendReviewGradePure,
+  deckPathForNote,
+  FLASHCARDS_DIR,
+  isFlashcardInternalPath,
+  logPathForNote,
+  relocateDeckPath,
+  relocateLogPath,
+  type FlashcardDeck,
+  type FlashcardDeckSummary,
+  type ReviewGrade,
+  type ReviewLogFile
+} from '@shared/flashcards'
+import { normalizeGamification, type StudyGamification } from '@shared/study-stats'
+import type { GenerateOptions, GenerateResult } from '@zennotes/bridge-contract/bridge'
 
 const WEB_CAPABILITIES: ZenCapabilities = {
   supportsUpdater: false,
@@ -94,7 +109,8 @@ const WEB_CAPABILITIES: ZenCapabilities = {
   supportsLocalFilesystemPickers: false,
   supportsRemoteWorkspace: false,
   supportsCliInstall: false,
-  supportsCustomTemplates: false
+  supportsCustomTemplates: false,
+  supportsStudyReminders: false
 }
 
 const WEB_APP_INFO: ZenAppInfo = {
@@ -432,50 +448,68 @@ function createExcalidraw(
   })
 }
 
-function renameNote(relPath: string, nextTitle: string): Promise<NoteMeta> {
-  return jsonRequest<NoteMeta>('/notes/rename', {
+async function renameNote(relPath: string, nextTitle: string): Promise<NoteMeta> {
+  const meta = await jsonRequest<NoteMeta>('/notes/rename', {
     method: 'POST',
     body: { path: relPath, title: nextTitle }
   })
+  await relocateFlashcardsOnWeb(relPath, meta.path)
+  return meta
 }
 
-function deleteNote(relPath: string): Promise<void> {
-  return jsonRequest<void>('/notes/delete', {
+async function deleteNote(relPath: string): Promise<void> {
+  await jsonRequest<void>('/notes/delete', {
     method: 'POST',
     body: { path: relPath }
   })
+  // Permanent delete: drop the deck so it doesn't dangle. Best-effort.
+  // Guard against recursing when the deleted path is itself a deck file.
+  if (!isFlashcardInternalPath(relPath)) {
+    await jsonRequest<void>('/notes/delete', {
+      method: 'POST',
+      body: { path: deckPathForNote(relPath) }
+    }).catch(() => {})
+  }
 }
 
-function moveToTrash(relPath: string): Promise<NoteMeta> {
-  return jsonRequest<NoteMeta>('/notes/trash', {
+async function moveToTrash(relPath: string): Promise<NoteMeta> {
+  const meta = await jsonRequest<NoteMeta>('/notes/trash', {
     method: 'POST',
     body: { path: relPath }
   })
+  await relocateFlashcardsOnWeb(relPath, meta.path)
+  return meta
 }
 
-function restoreFromTrash(relPath: string): Promise<NoteMeta> {
-  return jsonRequest<NoteMeta>('/notes/restore', {
+async function restoreFromTrash(relPath: string): Promise<NoteMeta> {
+  const meta = await jsonRequest<NoteMeta>('/notes/restore', {
     method: 'POST',
     body: { path: relPath }
   })
+  await relocateFlashcardsOnWeb(relPath, meta.path)
+  return meta
 }
 
 function emptyTrash(): Promise<void> {
   return jsonRequest<void>('/notes/empty-trash', { method: 'POST' })
 }
 
-function archiveNote(relPath: string): Promise<NoteMeta> {
-  return jsonRequest<NoteMeta>('/notes/archive', {
+async function archiveNote(relPath: string): Promise<NoteMeta> {
+  const meta = await jsonRequest<NoteMeta>('/notes/archive', {
     method: 'POST',
     body: { path: relPath }
   })
+  await relocateFlashcardsOnWeb(relPath, meta.path)
+  return meta
 }
 
-function unarchiveNote(relPath: string): Promise<NoteMeta> {
-  return jsonRequest<NoteMeta>('/notes/unarchive', {
+async function unarchiveNote(relPath: string): Promise<NoteMeta> {
+  const meta = await jsonRequest<NoteMeta>('/notes/unarchive', {
     method: 'POST',
     body: { path: relPath }
   })
+  await relocateFlashcardsOnWeb(relPath, meta.path)
+  return meta
 }
 
 function duplicateNote(relPath: string): Promise<NoteMeta> {
@@ -500,15 +534,17 @@ async function exportNotePdf(_relPath: string): Promise<string | null> {
   return null
 }
 
-function moveNote(
+async function moveNote(
   relPath: string,
   targetFolder: NoteFolder,
   targetSubpath: string
 ): Promise<NoteMeta> {
-  return jsonRequest<NoteMeta>('/notes/move', {
+  const meta = await jsonRequest<NoteMeta>('/notes/move', {
     method: 'POST',
     body: { path: relPath, targetFolder, targetSubpath }
   })
+  await relocateFlashcardsOnWeb(relPath, meta.path)
+  return meta
 }
 
 async function revealNote(_relPath: string): Promise<void> {
@@ -901,6 +937,125 @@ async function listDatabases(): Promise<DatabaseSummary[]> {
 }
 
 // --------------------------------------------------------------------
+// Flashcards — deck storage reuses the generic note file endpoints (same
+// trick as Databases). Generation is desktop-only in Phase 1.
+// --------------------------------------------------------------------
+
+async function readFlashcards(notePath: string): Promise<FlashcardDeck | null> {
+  const text = await readFileTextOrNull(deckPathForNote(notePath))
+  if (text == null) return null
+  try {
+    const parsed = JSON.parse(text) as FlashcardDeck
+    return parsed && Array.isArray(parsed.cards) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+async function writeFlashcards(notePath: string, deck: FlashcardDeck): Promise<FlashcardDeck> {
+  const normalized: FlashcardDeck = {
+    version: deck.version,
+    sourceNotePath: notePath.replace(/\\/g, '/').replace(/^\/+/, ''),
+    cards: deck.cards ?? [],
+    // Preserve the content-authored timestamp; every other write (e.g. grading)
+    // must not lose it, or deck staleness detection silently breaks.
+    ...(deck.authoredAt != null ? { authoredAt: deck.authoredAt } : {})
+  }
+  await writeNote(deckPathForNote(notePath), `${JSON.stringify(normalized, null, 2)}\n`)
+  return normalized
+}
+
+/**
+ * Enumerate every deck (source note + card count) for the cross-deck study
+ * queue. Deck files live under the internal `.zennotes/` dir, which the public
+ * folder listing hides, so this uses a dedicated server endpoint that walks
+ * `.zennotes/flashcards/`.
+ */
+function listFlashcardDecks(): Promise<FlashcardDeckSummary[]> {
+  return jsonRequest<FlashcardDeckSummary[]>('/flashcards/decks')
+}
+
+/** Read the append-only review log for a note (reuses the note file endpoint). */
+async function readReviewLog(notePath: string): Promise<ReviewLogFile | null> {
+  const text = await readFileTextOrNull(logPathForNote(notePath))
+  if (text == null) return null
+  try {
+    const parsed = JSON.parse(text) as ReviewLogFile
+    return parsed && Array.isArray(parsed.grades) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/** Append one grade to a note's review log (read-modify-write the JSON file). */
+async function appendReviewGrade(notePath: string, grade: ReviewGrade): Promise<ReviewLogFile> {
+  const existing = await readReviewLog(notePath)
+  const next = appendReviewGradePure(existing, notePath, grade)
+  await writeNote(logPathForNote(notePath), `${JSON.stringify(next, null, 2)}\n`)
+  return next
+}
+
+const GAMIFICATION_FILE = `${FLASHCARDS_DIR}/gamification.json`
+
+/** Read the vault-wide study gamification config (reuses the note file endpoint). */
+async function readStudyGamification(): Promise<StudyGamification> {
+  const text = await readFileTextOrNull(GAMIFICATION_FILE)
+  if (text == null) return normalizeGamification(null)
+  try {
+    return normalizeGamification(JSON.parse(text))
+  } catch {
+    return normalizeGamification(null)
+  }
+}
+
+/** Persist the vault-wide study gamification config. */
+async function writeStudyGamification(gamification: StudyGamification): Promise<StudyGamification> {
+  const normalized = normalizeGamification(gamification)
+  await writeNote(GAMIFICATION_FILE, `${JSON.stringify(normalized, null, 2)}\n`)
+  return normalized
+}
+
+const DESKTOP_ONLY_GENERATION = 'Flashcard generation is available on the desktop app for now.'
+
+function generateFlashcards(_notePath: string, _opts: GenerateOptions): Promise<GenerateResult> {
+  return Promise.reject(new Error(DESKTOP_ONLY_GENERATION))
+}
+
+function getAnthropicKeyPresent(): Promise<boolean> {
+  return Promise.resolve(false)
+}
+
+function setAnthropicKey(_key: string): Promise<void> {
+  return Promise.reject(new Error(DESKTOP_ONLY_GENERATION))
+}
+
+/**
+ * Best-effort: carry a note's deck file with it on rename/move/trash so it
+ * doesn't orphan. Mirrors the desktop lifecycle hooks. Never throws — a deck
+ * relocation failure must not fail the note op the user requested.
+ */
+async function relocateFlashcardsOnWeb(oldNotePath: string, newNotePath: string): Promise<void> {
+  if (oldNotePath === newNotePath) return
+  try {
+    const deck = await readFlashcards(oldNotePath)
+    if (deck) {
+      const { from } = relocateDeckPath(oldNotePath, newNotePath)
+      await writeFlashcards(newNotePath, { ...deck, sourceNotePath: newNotePath })
+      await deleteNote(from).catch(() => {})
+    }
+    // Carry the review log alongside the deck.
+    const log = await readReviewLog(oldNotePath)
+    if (log) {
+      const { from } = relocateLogPath(oldNotePath, newNotePath)
+      await writeNote(logPathForNote(newNotePath), `${JSON.stringify({ ...log, sourceNotePath: newNotePath }, null, 2)}\n`)
+      await deleteNote(from).catch(() => {})
+    }
+  } catch {
+    // swallow — see doc comment
+  }
+}
+
+// --------------------------------------------------------------------
 // Demo tour
 // --------------------------------------------------------------------
 
@@ -1130,6 +1285,11 @@ const settingsListeners = new Set<() => void>()
 function onOpenSettings(cb: () => void): () => void {
   settingsListeners.add(cb)
   return () => settingsListeners.delete(cb)
+}
+
+/** Study reminders are desktop-only; the web bridge never fires this. */
+function onOpenStudyDashboard(_cb: () => void): () => void {
+  return () => {}
 }
 
 async function getAppIconDataUrl(): Promise<string | null> {
@@ -1456,6 +1616,16 @@ export const httpBridge: ZenBridge = {
   renameDatabase,
   createRecordPage,
   listDatabases,
+  readFlashcards,
+  writeFlashcards,
+  listFlashcardDecks,
+  readReviewLog,
+  appendReviewGrade,
+  readStudyGamification,
+  writeStudyGamification,
+  generateFlashcards,
+  getAnthropicKeyPresent,
+  setAnthropicKey,
   writeNote,
   appendToNote,
   createNote,
@@ -1492,6 +1662,7 @@ export const httpBridge: ZenBridge = {
 
   onVaultChange,
   onOpenSettings,
+  onOpenStudyDashboard,
   onOpenNoteRequested,
   notifyRendererReady,
   onAppUpdateState,

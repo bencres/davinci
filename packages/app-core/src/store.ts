@@ -33,6 +33,77 @@ import {
   isDatabaseTabPath,
   isDatabaseCsvPath
 } from '@shared/databases'
+import {
+  buildCardIndex,
+  countDailyProgress,
+  draftToCard,
+  CONCEPT_GRAPH_TAB_PATH,
+  emptyDeck,
+  flashcardsTabPath,
+  isStudyTabPath,
+  normalizeDraft,
+  STUDY_DASHBOARD_TAB_PATH,
+  STUDY_TAB_PATH,
+  studyTabPath,
+  type Flashcard,
+  type FlashcardDeck,
+  type FlashcardDraft,
+  type FlashcardKind,
+  type FsrsRating,
+  type GradedCriterion,
+  type ReviewGrade,
+  type ReviewLogFile
+} from '@shared/flashcards'
+import {
+  selectDueQueue,
+  selectFreeQueue,
+  selectNewQueue,
+  shapeSession,
+  type CardIndex
+} from '@shared/srs'
+import {
+  rankWeakCards,
+  selectMiscalibratedCards,
+  selectRecentMisses
+} from '@shared/study-modes'
+import {
+  buildConceptGraph,
+  conceptKey,
+  prerequisiteChain,
+  type ConceptGraph
+} from '@shared/concept-graph'
+import {
+  computeStudyStats,
+  DEFAULT_STUDY_GAMIFICATION,
+  findStaleDecks,
+  type StaleDeck,
+  type StudyGamification,
+  type StudyStats
+} from '@shared/study-stats'
+import {
+  advancePomodoro,
+  DEFAULT_POMODORO_CONFIG,
+  normalizePomodoroConfig,
+  pausePomodoro,
+  resumePomodoro,
+  revivePomodoroState,
+  skipPomodoroPhase,
+  startPomodoro,
+  type PomodoroConfig,
+  type PomodoroState
+} from '@shared/pomodoro'
+import { requestPomodoroNotificationPermission } from './lib/pomodoro-notify'
+import { schedule } from './lib/srs-scheduler'
+import { backlinksForNote, resolveWikilinkTarget } from './lib/wikilinks'
+import {
+  DEFAULT_FLASHCARD_MODEL,
+  DEFAULT_FLASHCARD_DENSITY,
+  DEFAULT_FLASHCARD_GUIDANCE,
+  DEFAULT_FLASHCARD_NEW_PER_DAY,
+  DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
+} from '@shared/ipc'
+import type { FlashcardDensity, VaultTextSearchMatch } from '@shared/ipc'
+import type { FlashcardCardMix } from '@zennotes/bridge-contract/bridge'
 import { parseFrontmatter } from '@shared/template-files'
 import { recordTitle, composePageBody } from './lib/database-cells'
 import { applyManualMove, manualOrderCompare, parentDirOf } from './lib/manual-order'
@@ -308,6 +379,8 @@ interface Prefs {
   whichKeyHintMode: WhichKeyHintMode
   /** How long the leader hint overlay and pending leader sequence stay visible/armed. */
   whichKeyHintTimeoutMs: number
+  /** When true, pressing the leader key again dismisses a pending leader sequence. */
+  leaderToggle: boolean
   /** Which engine powers vault-wide text search. */
   vaultTextSearchBackend: VaultTextSearchBackendPreference
   /** Optional explicit binary path for ripgrep. Blank uses PATH lookup. */
@@ -460,6 +533,7 @@ const DEFAULT_PREFS: Prefs = {
   whichKeyHints: true,
   whichKeyHintMode: 'timed',
   whichKeyHintTimeoutMs: 900,
+  leaderToggle: true,
   vaultTextSearchBackend: 'auto',
   ripgrepBinaryPath: null,
   fzfBinaryPath: null,
@@ -553,6 +627,10 @@ function normalizePrefs(p: Partial<Prefs>): Prefs {
       typeof p.whichKeyHintTimeoutMs === 'number'
         ? Math.min(3000, Math.max(400, Math.round(p.whichKeyHintTimeoutMs)))
         : DEFAULT_PREFS.whichKeyHintTimeoutMs,
+    leaderToggle:
+      typeof p.leaderToggle === 'boolean'
+        ? p.leaderToggle
+        : DEFAULT_PREFS.leaderToggle,
     vaultTextSearchBackend:
       p.vaultTextSearchBackend &&
       VALID_VAULT_TEXT_SEARCH_BACKENDS.includes(p.vaultTextSearchBackend)
@@ -764,6 +842,51 @@ function savePrefs(p: Prefs): void {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * Running pomodoro timer, persisted per-device like the prefs so a restart
+ * resumes it. Timestamp-based state makes this safe: a paused timer comes back
+ * paused, a live one keeps its deadline, and one that expired while the app
+ * was closed is dropped by `revivePomodoroState`.
+ */
+const POMODORO_KEY = 'zen:pomodoro:v1'
+function loadPersistedPomodoro(): PomodoroState | null {
+  try {
+    const raw = localStorage.getItem(POMODORO_KEY)
+    return raw ? revivePomodoroState(JSON.parse(raw), Date.now()) : null
+  } catch {
+    return null
+  }
+}
+function persistPomodoro(state: PomodoroState | null): void {
+  try {
+    if (state) localStorage.setItem(POMODORO_KEY, JSON.stringify(state))
+    else localStorage.removeItem(POMODORO_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Serialize gamification writes. Rapid successive edits (typing "50" into a
+ * settings field fires one write per keystroke) would otherwise race: IPC
+ * responses can resolve out of order and a stale write can land on disk last.
+ * Each queued write snapshots the latest in-memory value at execution time, so
+ * collapsed edits persist correctly and the final write always wins.
+ */
+let studyGamificationWriteChain: Promise<void> = Promise.resolve()
+function queueStudyGamificationWrite(latest: () => StudyGamification | null): Promise<void> {
+  studyGamificationWriteChain = studyGamificationWriteChain.then(async () => {
+    const current = latest()
+    if (!current) return
+    try {
+      await window.zen.writeStudyGamification(current)
+    } catch (err) {
+      console.error('writeStudyGamification failed', err)
+    }
+  })
+  return studyGamificationWriteChain
 }
 
 function replaceNoteMeta(notes: NoteMeta[], oldPath: string, next: NoteMeta): NoteMeta[] {
@@ -1223,6 +1346,7 @@ function collectPrefs(s: {
   whichKeyHints: boolean
   whichKeyHintMode: WhichKeyHintMode
   whichKeyHintTimeoutMs: number
+  leaderToggle: boolean
   vaultTextSearchBackend: VaultTextSearchBackendPreference
   ripgrepBinaryPath: string | null
   fzfBinaryPath: string | null
@@ -1283,6 +1407,7 @@ function collectPrefs(s: {
     whichKeyHints: s.whichKeyHints,
     whichKeyHintMode: s.whichKeyHintMode,
     whichKeyHintTimeoutMs: s.whichKeyHintTimeoutMs,
+    leaderToggle: s.leaderToggle,
     vaultTextSearchBackend: s.vaultTextSearchBackend,
     ripgrepBinaryPath: s.ripgrepBinaryPath,
     fzfBinaryPath: s.fzfBinaryPath,
@@ -1539,6 +1664,24 @@ function hasTasksViewOpen(state: { paneLayout: PaneLayout }): boolean {
   return allLeaves(state.paneLayout).some((leaf) => leaf.tabs.includes(TASKS_TAB_PATH))
 }
 
+/** True when the active pane's active tab is the study dashboard. */
+export function isStudyDashboardActive(state: {
+  paneLayout: PaneLayout
+  activePaneId: string
+}): boolean {
+  const leaf = findLeaf(state.paneLayout, state.activePaneId)
+  return leaf?.activeTab === STUDY_DASHBOARD_TAB_PATH
+}
+
+/** True when the active pane's active tab is the concept (knowledge) graph. */
+export function isConceptGraphActive(state: {
+  paneLayout: PaneLayout
+  activePaneId: string
+}): boolean {
+  const leaf = findLeaf(state.paneLayout, state.activePaneId)
+  return leaf?.activeTab === CONCEPT_GRAPH_TAB_PATH
+}
+
 /** True when the active pane's active tab is the vault-wide Tags view. */
 export function isTagsViewActive(state: {
   paneLayout: PaneLayout
@@ -1592,6 +1735,74 @@ export function isQuickNotesViewActive(state: {
   const leaf = findLeaf(state.paneLayout, state.activePaneId)
   return leaf?.activeTab === QUICK_NOTES_TAB_PATH
 }
+
+/**
+ * How a flashcard review tab was opened. `edit` loads the note's saved deck into
+ * the editable surface and, on save, REPLACES the deck (preserving card identity)
+ * rather than appending like the generation modes.
+ */
+export type FlashcardReviewMode = 'quick' | 'custom' | 'manual' | 'edit' | 'cross'
+
+/** One-off generation options edited in the custom-generation form. */
+export interface FlashcardGenOptions {
+  density: FlashcardDensity
+  cardMix: FlashcardCardMix
+  /** Free-text steering for the model. */
+  instructions: string
+  /** Soft target for card count; null = use the per-run cap. */
+  maxCards: number | null
+  /** Also generate cross-note synthesis cards from wiki-linked related notes. */
+  crossNote: boolean
+}
+
+/** What a study session draws cards from: the whole vault, one note's deck, or one concept. */
+export type StudyScope =
+  | { kind: 'all' }
+  | { kind: 'note'; notePath: string }
+  | { kind: 'concept'; concept: string }
+
+/**
+ * Study-session phase. `front` shows the prompt (and captures the predicted
+ * rating); `revealed` shows the answer/rubric for grading; `summary` is the
+ * end-of-session recap.
+ */
+export type StudyPhase = 'idle' | 'loading' | 'front' | 'revealed' | 'summary'
+
+/**
+ * The card-picking strategy for a session, layered on top of its `scope`:
+ * - `'due'` — spaced-repetition default (scheduled/new cards, daily caps applied)
+ * - `'free'` — ignore due dates: a deck, concept, or random subset of the vault
+ * - `'weak'` — cards with the lowest review accuracy (struggle list)
+ * - `'redo'` — cards graded again/hard recently (today's misses)
+ * - `'calibration'` — cards where the predicted rating diverged from the actual
+ * - `'new'` — never-scheduled cards only, ignoring the daily new cap
+ *
+ * Orthogonal modifiers (`cardKind`, `includePrerequisites`, `timeBoxMs`,
+ * `masteryLoop`, `limit`) compose on top of any mode — see `StudySessionOptions`.
+ */
+export type StudyMode = 'due' | 'free' | 'weak' | 'redo' | 'calibration' | 'new'
+
+/** Options controlling how `startStudySession` builds and runs its queue. */
+export interface StudySessionOptions {
+  /** Card-picking strategy (default `'due'`). */
+  mode?: StudyMode
+  /** Cap the queue length (a subset of the scope). */
+  limit?: number
+  /** Restrict to one card kind (recall drill vs. synthesis deep-work). */
+  cardKind?: FlashcardKind
+  /** Concept scope only: include the concept's prerequisites, foundational-first. */
+  includePrerequisites?: boolean
+  /** Stop condition: end the session after this much elapsed time (ms). */
+  timeBoxMs?: number
+  /** Re-queue any card not graded good/easy until the whole scope is mastered. */
+  masteryLoop?: boolean
+}
+
+/** Default size of a "random cards" free-study session over the whole vault. */
+export const FREE_STUDY_DEFAULT_LIMIT = 20
+
+/** Default length of a time-boxed quick session (10 minutes). */
+export const STUDY_TIME_BOX_DEFAULT_MS = 10 * 60 * 1000
 
 interface Store {
   vault: VaultInfo | null
@@ -1650,6 +1861,7 @@ interface Store {
   whichKeyHints: boolean
   whichKeyHintMode: WhichKeyHintMode
   whichKeyHintTimeoutMs: number
+  leaderToggle: boolean
   vaultTextSearchBackend: VaultTextSearchBackendPreference
   ripgrepBinaryPath: string | null
   fzfBinaryPath: string | null
@@ -1766,6 +1978,35 @@ interface Store {
   /** In-flight load flags keyed by `.csv` path. */
   databasesLoading: Record<string, boolean>
 
+  // --- Flashcards (Phase 1) ---
+  /** The note whose review tab is currently open (drives FlashcardReviewView). */
+  flashcardReviewNote: string | null
+  /** How the current review tab was opened (drives append-vs-replace on save). */
+  flashcardReviewMode: FlashcardReviewMode
+  /** Current review batch of draft cards returned by Claude (edited in place). */
+  flashcardDraftCards: FlashcardDraft[]
+  /** Per-draft keep/discard toggles, parallel to `flashcardDraftCards`. */
+  flashcardDraftKept: boolean[]
+  /** Per-draft "user edited during review" flags, parallel to `flashcardDraftCards`. */
+  flashcardDraftEdited: boolean[]
+  /**
+   * Per-draft origin card, parallel to `flashcardDraftCards`. Set when editing an
+   * existing deck so a saved card keeps its `id`/`srs`/`createdAt` on save; `null`
+   * for freshly generated or hand-authored drafts.
+   */
+  flashcardDraftOrigin: (Flashcard | null)[]
+  /** Loaded saved decks keyed by source note path. */
+  flashcardDeckByNote: Record<string, FlashcardDeck>
+  /** `configuring` = custom-generation form before a run; `reviewing` = card list. */
+  flashcardGenStatus: 'idle' | 'configuring' | 'generating' | 'reviewing' | 'error'
+  flashcardGenError: string | null
+  /** How many cards Claude returned that failed normalization in the last run. */
+  flashcardDropped: number
+  /** True while a "Generate more" run is appending to the current review batch. */
+  flashcardGenMoreLoading: boolean
+  /** Active per-generation options for this review session (custom + reused by "more"). */
+  flashcardGenOptions: FlashcardGenOptions
+
   /** Tags currently selected in the Tags view. The view shows every non-
    *  trash note carrying *all* (or, in `any` mode, any) of these, depending on
    *  `tagMatchMode`. Cleared when the Tags tab closes. */
@@ -1851,6 +2092,135 @@ interface Store {
   forgetDatabase: (csvPath: string) => Promise<void>
   /** Open a record as a markdown "page" note (creating + linking it on first open). */
   openRecordPage: (csvPath: string, rowId: string) => Promise<void>
+
+  // --- Flashcards (Phase 1) ---
+  /**
+   * Open the study review tab for a note. `quick` generates immediately,
+   * `custom` shows the generation-options form first, `manual` opens an empty
+   * batch for hand-authored cards.
+   */
+  openFlashcardReview: (notePath: string, mode?: FlashcardReviewMode) => Promise<void>
+  /**
+   * Close an "orphan prerequisite" gap: find the vault note that best covers
+   * `concept` (text search, most matches wins) and open the custom generation
+   * form on it with instructions prefilled to teach that concept. Returns
+   * `'no-notes'` when nothing in the vault mentions the concept — the caller
+   * offers to create a stub note instead (see `createNoteForConcept`).
+   */
+  generateCardsForConcept: (concept: string) => Promise<'opened' | 'no-notes'>
+  /** Create (and open) a stub note titled after a concept, to be written then card-generated. */
+  createNoteForConcept: (concept: string) => Promise<void>
+  /** Patch the active per-generation options (custom form). */
+  setFlashcardGenOption: (patch: Partial<FlashcardGenOptions>) => void
+  /** Run Claude generation for the review note; sets status/draft state. */
+  generateFlashcardsForActiveNote: () => Promise<void>
+  /** Run another capped generation and APPEND distinct cards to the review batch. */
+  generateMoreFlashcards: () => Promise<void>
+  /** Append a blank, hand-authored recall card to the review batch (edit mode). */
+  addManualCard: () => number
+  /** Patch a draft card in place (marks the run as user-edited). */
+  updateDraftCard: (index: number, patch: Partial<FlashcardDraft>) => void
+  /** Toggle a draft card's keep/discard state. */
+  toggleDraftCardKept: (index: number) => void
+  /** Promote the kept draft cards to stored cards and merge into the note's deck. */
+  saveReviewedFlashcards: (acceptedIndexes: number[]) => Promise<void>
+  /** Read a note's saved deck into `flashcardDeckByNote`. */
+  loadFlashcardDeck: (notePath: string) => Promise<void>
+
+  // --- Study sessions (Phase 2: FSRS spaced-repetition review loop) ---
+  /** What the current session draws from (null when no session is open). */
+  studyScope: StudyScope | null
+  /** Cross-deck index (cardId → card + sourceNotePath) for the open session. */
+  studyIndex: CardIndex | null
+  /** Ordered cardIds remaining to review this session. */
+  studyQueue: string[]
+  /** Position within `studyQueue`. */
+  studyCursor: number
+  studyPhase: StudyPhase
+  /** Calibration: the rating predicted BEFORE reveal for the current card. */
+  studyPredicted: FsrsRating | null
+  /** Grades recorded this session (for the summary; persisted in Phase 2b). */
+  studySessionGrades: ReviewGrade[]
+  studyError: string | null
+  /** How the open session picked its cards (for re-offering the same mode). */
+  studyMode: StudyMode
+  /** Epoch ms the current session started (for the time-box stop condition). */
+  studySessionStartedAt: number | null
+  /** Time-box: end the session this many ms after it started (null = no limit). */
+  studyTimeBoxMs: number | null
+  /** Mastery loop: re-queue any card not graded good/easy until all are mastered. */
+  studyMasteryLoop: boolean
+  /**
+   * Build the queue for `scope`, open the study tab, and start reviewing.
+   * Global (`{kind:'all'}`) draws across every deck; per-note draws from one
+   * deck. `opts.mode` picks the strategy (due / free / weak / redo / calibration
+   * / new); `cardKind`, `includePrerequisites`, `timeBoxMs`, `masteryLoop`, and
+   * `limit` are orthogonal modifiers that compose on top.
+   */
+  startStudySession: (scope: StudyScope, opts?: StudySessionOptions) => Promise<void>
+  /** Capture the pre-reveal predicted rating for the current card. */
+  setStudyPredicted: (rating: FsrsRating) => void
+  /** Move the current card from `front` to `revealed`. */
+  revealCurrentCard: () => void
+  /** Grade the current card: reschedule its SRS, persist, record, and advance. */
+  gradeCurrentCard: (
+    rating: FsrsRating,
+    detail?: { learnerAnswer?: string; criteria?: GradedCriterion[]; score?: number }
+  ) => Promise<void>
+  /** Close the study tab and reset session state. */
+  endStudySession: () => void
+
+  // --- Study dashboard (gamified study hub) ---
+  /** Aggregated dashboard stats (streak, heatmap, mastery…), null until loaded. */
+  studyStats: StudyStats | null
+  /** Persisted gamification config (editable daily goal + streak bookkeeping). */
+  studyGamification: StudyGamification | null
+  /** Decks whose source note was edited after the cards were authored. */
+  staleDecks: StaleDeck[]
+  studyStatsLoading: boolean
+  studyStatsError: string | null
+  /** Open (or focus) the dashboard tab and load its stats. */
+  openStudyDashboard: () => Promise<void>
+  /** (Re)compute dashboard stats from every deck + review log + the config. */
+  loadStudyStats: () => Promise<void>
+  /** Persist a new daily-goal target and recompute stats. */
+  setStudyDailyGoal: (goal: number) => Promise<void>
+  /** Persist the study success-chime toggle (on by default). */
+  setStudySoundEnabled: (enabled: boolean) => Promise<void>
+
+  // --- Pomodoro focus timer (bottom-right overlay) ---
+  /** Running timer state, or null when no pomodoro is active. Persisted per-device. */
+  pomodoro: PomodoroState | null
+  /** Overlay collapsed to the compact clock pill. */
+  pomodoroMinimized: boolean
+  /** Start a focus phase with the configured durations; show the overlay expanded. */
+  startPomodoroTimer: () => Promise<void>
+  /**
+   * Roll the timer forward to now; returns true when a phase boundary was
+   * crossed (so the overlay can chime / notify). No-op when idle or paused.
+   */
+  tickPomodoroTimer: () => boolean
+  togglePomodoroPause: () => void
+  skipPomodoroPhase: () => void
+  stopPomodoroTimer: () => void
+  setPomodoroMinimized: (minimized: boolean) => void
+  /** Persist new pomodoro durations (applies from the next started timer). */
+  setPomodoroConfig: (config: PomodoroConfig) => Promise<void>
+  /** Persist the phase-end OS-notification toggle (on by default). */
+  setPomodoroNotificationsEnabled: (enabled: boolean) => Promise<void>
+  /** Read the persisted gamification config if it isn't in memory yet. */
+  loadStudyGamification: () => Promise<void>
+
+  // --- Concept (knowledge) graph ---
+  /** Concept dependency graph (nodes/edges/gaps), null until loaded. */
+  conceptGraph: ConceptGraph | null
+  conceptGraphLoading: boolean
+  conceptGraphError: string | null
+  /** Open (or focus) the concept-graph tab and (re)build the graph. */
+  openConceptGraph: () => Promise<void>
+  /** (Re)build the concept graph from every deck + review log. */
+  loadConceptGraph: () => Promise<void>
+
   /** Rename a record's linked page note to match its title (no-op if unlinked). */
   renameRecordPage: (csvPath: string, rowId: string) => Promise<void>
   /** Add or remove a tag from the Tags view selection without touching
@@ -1966,6 +2336,7 @@ interface Store {
   setWhichKeyHints: (on: boolean) => void
   setWhichKeyHintMode: (mode: WhichKeyHintMode) => void
   setWhichKeyHintTimeoutMs: (ms: number) => void
+  setLeaderToggle: (on: boolean) => void
   setVaultTextSearchBackend: (backend: VaultTextSearchBackendPreference) => void
   setRipgrepBinaryPath: (path: string | null) => void
   setFzfBinaryPath: (path: string | null) => void
@@ -2496,6 +2867,41 @@ function withDateNotePatternHistory(
           : next.weeklyNotes.legacyPatterns
     }
   }
+}
+
+/** Fronts + focus concepts already covered, to tell the generator what to avoid. */
+function cardIdentifiers(cards: { front: string; concepts: string[] }[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const c of cards) {
+    const front = c.front?.trim()
+    if (front && !seen.has(`f:${front}`)) {
+      seen.add(`f:${front}`)
+      out.push(front)
+    }
+    const focus = c.concepts?.[0]?.trim()
+    if (focus && !seen.has(`c:${focus}`)) {
+      seen.add(`c:${focus}`)
+      out.push(focus)
+    }
+  }
+  return out
+}
+
+/** Vault-relative paths of notes related to `notePath` (outgoing wiki-links +
+ *  backlinks), for cross-note synthesis generation. Capped for prompt size. */
+function relatedNotePathsFor(notes: NoteMeta[], notePath: string, max = 5): string[] {
+  const current = notes.find((n) => n.path === notePath)
+  if (!current) return []
+  const out = new Set<string>()
+  for (const target of current.wikilinks ?? []) {
+    const resolved = resolveWikilinkTarget(notes, target)
+    if (resolved && resolved.path !== notePath) out.add(resolved.path)
+  }
+  for (const b of backlinksForNote(notes, current)) {
+    if (b.path !== notePath) out.add(b.path)
+  }
+  return [...out].slice(0, max)
 }
 
 function rewriteNoteCommentsPath(
@@ -3046,6 +3452,7 @@ export const useStore = create<Store>((set, get) => {
   whichKeyHints: loadPrefs().whichKeyHints,
   whichKeyHintMode: loadPrefs().whichKeyHintMode,
   whichKeyHintTimeoutMs: loadPrefs().whichKeyHintTimeoutMs,
+  leaderToggle: loadPrefs().leaderToggle,
   vaultTextSearchBackend: loadPrefs().vaultTextSearchBackend,
   ripgrepBinaryPath: loadPrefs().ripgrepBinaryPath,
   fzfBinaryPath: loadPrefs().fzfBinaryPath,
@@ -3106,6 +3513,46 @@ export const useStore = create<Store>((set, get) => {
   tasksCalendarMonthAnchor: null,
   databases: {},
   databasesLoading: {},
+  flashcardReviewNote: null,
+  flashcardReviewMode: 'quick',
+  flashcardDraftCards: [],
+  flashcardDraftKept: [],
+  flashcardDraftEdited: [],
+  flashcardDraftOrigin: [],
+  flashcardDeckByNote: {},
+  flashcardGenStatus: 'idle',
+  flashcardGenError: null,
+  flashcardDropped: 0,
+  flashcardGenMoreLoading: false,
+  flashcardGenOptions: {
+    density: DEFAULT_FLASHCARD_DENSITY,
+    cardMix: 'balanced',
+    instructions: '',
+    maxCards: null,
+    crossNote: false
+  },
+  studyScope: null,
+  studyIndex: null,
+  studyQueue: [],
+  studyCursor: 0,
+  studyPhase: 'idle',
+  studyPredicted: null,
+  studySessionGrades: [],
+  studyError: null,
+  studyMode: 'due',
+  studySessionStartedAt: null,
+  studyTimeBoxMs: null,
+  studyMasteryLoop: false,
+  studyStats: null,
+  studyGamification: null,
+  staleDecks: [],
+  studyStatsLoading: false,
+  studyStatsError: null,
+  pomodoro: loadPersistedPomodoro(),
+  pomodoroMinimized: false,
+  conceptGraph: null,
+  conceptGraphLoading: false,
+  conceptGraphError: null,
   selectedTags: [],
   tagMatchMode: 'all',
   focusedPanel: null,
@@ -3491,6 +3938,785 @@ export const useStore = create<Store>((set, get) => {
       }
     } catch (err) {
       console.error('renameRecordPage failed', err)
+    }
+  },
+
+  openFlashcardReview: async (notePath, mode = 'quick') => {
+    const vs = get().vaultSettings
+    set({
+      flashcardReviewNote: notePath,
+      flashcardReviewMode: mode,
+      // `manual`/`edit` land straight on the review list; the others reset to idle
+      // until generation runs (quick) or the user submits the form (custom).
+      flashcardGenStatus: mode === 'manual' || mode === 'edit' ? 'reviewing' : 'idle',
+      flashcardGenError: null,
+      flashcardDraftCards: [],
+      flashcardDraftKept: [],
+      flashcardDraftEdited: [],
+      flashcardDraftOrigin: [],
+      flashcardDropped: 0,
+      flashcardGenOptions: {
+        density: vs.flashcardDensity ?? DEFAULT_FLASHCARD_DENSITY,
+        cardMix: 'balanced',
+        instructions: '',
+        maxCards: null,
+        crossNote: mode === 'cross'
+      }
+    })
+    await get().openNoteInPane(get().activePaneId, flashcardsTabPath(notePath))
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    set({ focusedPanel: 'editor' })
+    // Show any previously-saved deck while generating / authoring.
+    await get().loadFlashcardDeck(notePath)
+    if (mode === 'quick' || mode === 'cross') {
+      await get().generateFlashcardsForActiveNote()
+    } else if (mode === 'custom') {
+      set({ flashcardGenStatus: 'configuring' })
+    } else if (mode === 'edit') {
+      // Load the saved deck into the editable surface; each draft keeps a link to
+      // its origin card so its identity (id/srs/createdAt) survives the save.
+      const saved = get().flashcardDeckByNote[notePath]?.cards ?? []
+      const cards: FlashcardDraft[] = []
+      const origin: (Flashcard | null)[] = []
+      for (const card of saved) {
+        const draft = normalizeDraft(card)
+        if (!draft) continue
+        cards.push(draft)
+        origin.push(card)
+      }
+      set({
+        flashcardDraftCards: cards,
+        flashcardDraftKept: cards.map(() => true),
+        flashcardDraftEdited: cards.map(() => false),
+        flashcardDraftOrigin: origin
+      })
+    }
+  },
+
+  generateCardsForConcept: async (concept) => {
+    const label = concept.trim()
+    if (!label) return 'no-notes'
+    let matches: VaultTextSearchMatch[] = []
+    try {
+      matches = await window.zen.searchVaultText(label)
+    } catch (err) {
+      console.error('generateCardsForConcept search failed', err)
+    }
+    // Rank candidate notes by how often they mention the concept; break ties
+    // toward the more recently edited note (fresher coverage of the idea).
+    const countByPath = new Map<string, number>()
+    for (const m of matches) {
+      if (!m.path.toLowerCase().endsWith('.md')) continue
+      countByPath.set(m.path, (countByPath.get(m.path) ?? 0) + 1)
+    }
+    if (countByPath.size === 0) return 'no-notes'
+    const updatedAtByPath = new Map(get().notes.map((n) => [n.path, n.updatedAt]))
+    const best = [...countByPath.entries()].sort(
+      (a, b) =>
+        b[1] - a[1] ||
+        (updatedAtByPath.get(b[0]) ?? 0) - (updatedAtByPath.get(a[0]) ?? 0) ||
+        (a[0] < b[0] ? -1 : 1)
+    )[0][0]
+    // Custom mode shows the config form (no auto-generation), so the learner can
+    // adjust before running; the prefilled instructions carry the concept focus.
+    await get().openFlashcardReview(best, 'custom')
+    get().setFlashcardGenOption({
+      instructions: `Focus specifically on the concept "${label}" — it is currently an untaught prerequisite of other cards. Generate cards that teach it directly.`
+    })
+    return 'opened'
+  },
+
+  createNoteForConcept: async (concept) => {
+    const label = concept.trim()
+    if (!label) return
+    await get().createAndOpen('inbox', '', { title: label })
+  },
+
+  setFlashcardGenOption: (patch) => {
+    set((s) => ({ flashcardGenOptions: { ...s.flashcardGenOptions, ...patch } }))
+  },
+
+  generateFlashcardsForActiveNote: async () => {
+    const notePath = get().flashcardReviewNote
+    if (!notePath) return
+    if (get().flashcardGenStatus === 'generating') return
+    set({ flashcardGenStatus: 'generating', flashcardGenError: null, flashcardDropped: 0 })
+    try {
+      const s = get()
+      const model = s.vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
+      const o = s.flashcardGenOptions
+      // Avoid re-creating cards already saved for this note.
+      const existing = cardIdentifiers(s.flashcardDeckByNote[notePath]?.cards ?? [])
+      const relatedNotePaths = o.crossNote ? relatedNotePathsFor(s.notes, notePath) : undefined
+      const result = await window.zen.generateFlashcards(notePath, {
+        model,
+        density: o.density,
+        cardMix: o.cardMix,
+        maxCards: o.maxCards ?? undefined,
+        instructions: o.instructions,
+        guidance: s.vaultSettings.flashcardGuidance ?? DEFAULT_FLASHCARD_GUIDANCE,
+        existing,
+        relatedNotePaths
+      })
+      set({
+        flashcardDraftCards: result.drafts,
+        flashcardDraftKept: result.drafts.map(() => true),
+        flashcardDraftEdited: result.drafts.map(() => false),
+        flashcardDraftOrigin: result.drafts.map(() => null),
+        flashcardDropped: result.dropped,
+        flashcardGenStatus: 'reviewing',
+        flashcardGenError: null
+      })
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err)
+      // The main process tags the missing-key case so we can show a Settings prompt.
+      const friendly = raw.includes('NO_ANTHROPIC_KEY')
+        ? 'No Anthropic API key is set. Add one in Settings to generate flashcards.'
+        : raw || 'Flashcard generation failed.'
+      set({ flashcardGenStatus: 'error', flashcardGenError: friendly })
+    }
+  },
+
+  generateMoreFlashcards: async () => {
+    const notePath = get().flashcardReviewNote
+    if (!notePath) return
+    if (get().flashcardGenStatus !== 'reviewing' || get().flashcardGenMoreLoading) return
+    set({ flashcardGenMoreLoading: true, flashcardGenError: null })
+    try {
+      const s = get()
+      const model = s.vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
+      const o = s.flashcardGenOptions
+      // Exclude everything already on screen plus the saved deck.
+      const existing = cardIdentifiers([
+        ...s.flashcardDraftCards,
+        ...(s.flashcardDeckByNote[notePath]?.cards ?? [])
+      ])
+      const relatedNotePaths = o.crossNote ? relatedNotePathsFor(s.notes, notePath) : undefined
+      const result = await window.zen.generateFlashcards(notePath, {
+        model,
+        density: o.density,
+        cardMix: o.cardMix,
+        maxCards: o.maxCards ?? undefined,
+        instructions: o.instructions,
+        guidance: s.vaultSettings.flashcardGuidance ?? DEFAULT_FLASHCARD_GUIDANCE,
+        existing,
+        relatedNotePaths
+      })
+      set((prev) => ({
+        flashcardDraftCards: [...prev.flashcardDraftCards, ...result.drafts],
+        flashcardDraftKept: [...prev.flashcardDraftKept, ...result.drafts.map(() => true)],
+        flashcardDraftEdited: [...prev.flashcardDraftEdited, ...result.drafts.map(() => false)],
+        flashcardDraftOrigin: [...prev.flashcardDraftOrigin, ...result.drafts.map(() => null)],
+        flashcardGenMoreLoading: false
+      }))
+    } catch (err) {
+      // Keep the existing batch on screen; surface a brief inline message.
+      const raw = err instanceof Error ? err.message : String(err)
+      set({
+        flashcardGenMoreLoading: false,
+        flashcardGenError: raw.includes('NO_ANTHROPIC_KEY')
+          ? 'No Anthropic API key is set. Add one in Settings.'
+          : 'Could not generate more cards. Try again.'
+      })
+    }
+  },
+
+  addManualCard: () => {
+    // A blank recall/cued card is the simplest contract-valid starting point;
+    // the user fills it in (and can switch it to synthesis) via the edit form.
+    const blank: FlashcardDraft = {
+      kind: 'recall',
+      subtype: 'cued',
+      front: '',
+      back: '',
+      concepts: [''],
+      prerequisites: [],
+      difficulty: 3
+    }
+    let index = 0
+    set((s) => {
+      index = s.flashcardDraftCards.length
+      return {
+        // Manual authoring always happens on the reviewing surface.
+        flashcardGenStatus: 'reviewing',
+        flashcardDraftCards: [...s.flashcardDraftCards, blank],
+        flashcardDraftKept: [...s.flashcardDraftKept, true],
+        flashcardDraftEdited: [...s.flashcardDraftEdited, true],
+        flashcardDraftOrigin: [...s.flashcardDraftOrigin, null]
+      }
+    })
+    return index
+  },
+
+  updateDraftCard: (index, patch) => {
+    set((s) => {
+      if (index < 0 || index >= s.flashcardDraftCards.length) return {}
+      const next = s.flashcardDraftCards.slice()
+      next[index] = { ...next[index], ...patch }
+      const edited = s.flashcardDraftEdited.slice()
+      edited[index] = true
+      return { flashcardDraftCards: next, flashcardDraftEdited: edited }
+    })
+  },
+
+  toggleDraftCardKept: (index) => {
+    set((s) => {
+      if (index < 0 || index >= s.flashcardDraftKept.length) return {}
+      const next = s.flashcardDraftKept.slice()
+      next[index] = !next[index]
+      return { flashcardDraftKept: next }
+    })
+  },
+
+  saveReviewedFlashcards: async (acceptedIndexes) => {
+    const notePath = get().flashcardReviewNote
+    if (!notePath) return
+    const drafts = get().flashcardDraftCards
+    const edited = get().flashcardDraftEdited
+    const origin = get().flashcardDraftOrigin
+    const editingDeck = get().flashcardReviewMode === 'edit'
+    const model = get().vaultSettings.flashcardModel || DEFAULT_FLASHCARD_MODEL
+    // Re-validate every accepted draft against the card contract before saving —
+    // this guards hand-authored and post-edit cards (e.g. a manual synthesis card
+    // missing its rubric, or an emptied front) so the deck stays well-formed.
+    const accepted: Flashcard[] = []
+    let invalid = 0
+    for (const i of acceptedIndexes) {
+      if (i < 0 || i >= drafts.length) continue
+      const valid = normalizeDraft(drafts[i])
+      if (!valid) {
+        invalid++
+        continue
+      }
+      const from = origin[i]
+      if (from) {
+        // Editing a saved card: keep its identity + scheduling state, take the
+        // edited content from `valid` (so e.g. a synthesis→recall switch drops the
+        // old rubric instead of leaving it stale).
+        accepted.push({
+          ...valid,
+          id: from.id,
+          srs: from.srs,
+          createdAt: from.createdAt,
+          generatedBy: from.generatedBy,
+          userEdited: from.userEdited || (edited[i] ?? false)
+        })
+      } else {
+        accepted.push(draftToCard(valid, model, { userEdited: edited[i] ?? false }))
+      }
+    }
+    if (accepted.length === 0) {
+      set({
+        flashcardGenError: invalid
+          ? `Nothing saved — ${invalid} card${invalid === 1 ? '' : 's'} ${invalid === 1 ? 'is' : 'are'} incomplete (check front/back, a focus concept, and a rubric on synthesis cards).`
+          : null
+      })
+      return
+    }
+    try {
+      const existing = get().flashcardDeckByNote[notePath] ?? (await window.zen.readFlashcards(notePath))
+      const base = existing ?? emptyDeck(notePath)
+      // Edit mode REPLACES the deck with the kept set (so discarded cards are
+      // removed); generation/manual modes APPEND to whatever is already saved.
+      const cards = editingDeck ? accepted : [...base.cards, ...accepted]
+      // A review-surface save is a human vouching for the deck against the note
+      // as it is NOW — stamp it (grading writes preserve, never set, this).
+      const merged: FlashcardDeck = { ...base, cards, authoredAt: Date.now() }
+      const saved = await window.zen.writeFlashcards(notePath, merged)
+      set((s) => ({
+        flashcardDeckByNote: { ...s.flashcardDeckByNote, [notePath]: saved },
+        flashcardDraftCards: [],
+        flashcardDraftKept: [],
+        flashcardDraftEdited: [],
+        flashcardDraftOrigin: [],
+        flashcardGenStatus: 'idle',
+        flashcardGenError: invalid
+          ? `Saved ${accepted.length} card${accepted.length === 1 ? '' : 's'}; skipped ${invalid} incomplete one${invalid === 1 ? '' : 's'}.`
+          : null
+      }))
+    } catch (err) {
+      console.error('saveReviewedFlashcards failed', err)
+      set({
+        flashcardGenStatus: 'error',
+        flashcardGenError: err instanceof Error ? err.message : 'Failed to save flashcards.'
+      })
+    }
+  },
+
+  loadFlashcardDeck: async (notePath) => {
+    try {
+      const deck = await window.zen.readFlashcards(notePath)
+      if (deck) {
+        set((s) => ({ flashcardDeckByNote: { ...s.flashcardDeckByNote, [notePath]: deck } }))
+      }
+    } catch (err) {
+      console.error('loadFlashcardDeck failed', err)
+    }
+  },
+
+  startStudySession: async (scope, opts) => {
+    const mode: StudyMode = opts?.mode ?? 'due'
+    const tabPath = scope.kind === 'note' ? studyTabPath(scope.notePath) : STUDY_TAB_PATH
+    set({
+      studyScope: scope,
+      studyMode: mode,
+      studyTimeBoxMs: opts?.timeBoxMs ?? null,
+      studyMasteryLoop: opts?.masteryLoop ?? false,
+      studySessionStartedAt: null,
+      studyPhase: 'loading',
+      studyIndex: null,
+      studyQueue: [],
+      studyCursor: 0,
+      studyPredicted: null,
+      studySessionGrades: [],
+      studyError: null
+    })
+    // Open (or focus) the study tab and hand keyboard focus to the editor pane.
+    await get().openNoteInPane(get().activePaneId, tabPath)
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    set({ focusedPanel: 'editor' })
+    try {
+      // Build the cross-deck index: one deck for a note scope, all decks for
+      // the global queue or a concept scope (which may span notes).
+      const decks: FlashcardDeck[] = []
+      const cache = { ...get().flashcardDeckByNote }
+      if (scope.kind === 'note') {
+        const deck =
+          get().flashcardDeckByNote[scope.notePath] ??
+          (await window.zen.readFlashcards(scope.notePath))
+        if (deck) {
+          decks.push(deck)
+          cache[scope.notePath] = deck
+        }
+      } else {
+        const summaries = await window.zen.listFlashcardDecks()
+        for (const s of summaries) {
+          const deck = await window.zen.readFlashcards(s.sourceNotePath)
+          if (deck) {
+            decks.push(deck)
+            cache[s.sourceNotePath] = deck
+          }
+        }
+      }
+
+      // Review logs back the daily caps AND the history-driven modes (weak / redo
+      // / calibration) and the prerequisite graph. Load once for the in-scope
+      // notes; a missing/corrupt log just means no recorded history for that note.
+      const logs: ReviewLogFile[] = []
+      for (const p of Array.from(new Set(decks.map((d) => d.sourceNotePath)))) {
+        try {
+          const log = await window.zen.readReviewLog(p)
+          if (log) logs.push(log)
+        } catch {
+          // ignore — treat as no history
+        }
+      }
+
+      let index = buildCardIndex(decks)
+      // Concept scope: keep cards tagged with the concept (case-insensitive). With
+      // `includePrerequisites`, widen to the concept's prerequisites too, and
+      // remember each concept's depth so the queue can run foundational-first.
+      let depthByKey: Map<string, number> | null = null
+      if (scope.kind === 'concept') {
+        let keys = new Set([conceptKey(scope.concept)])
+        if (opts?.includePrerequisites) {
+          const graph = buildConceptGraph(decks, logs)
+          keys = new Set(prerequisiteChain(graph, scope.concept))
+          depthByKey = new Map(graph.nodes.map((n) => [n.key, n.depth]))
+        }
+        index = Object.fromEntries(
+          Object.entries(index).filter(([, e]) =>
+            e.card.concepts.some((c) => keys.has(conceptKey(c)))
+          )
+        )
+      }
+      // Orthogonal kind filter: a pure recall drill or synthesis deep-work pass.
+      if (opts?.cardKind) {
+        const kind = opts.cardKind
+        index = Object.fromEntries(Object.entries(index).filter(([, e]) => e.card.kind === kind))
+      }
+
+      const now = new Date()
+      // Pick the base queue by mode. `due` applies the Anki-style caps; the rest
+      // ignore scheduling (grading still reschedules cards exactly the same way).
+      let baseQueue: string[]
+      switch (mode) {
+        case 'free':
+          baseQueue = selectFreeQueue(index, { shuffle: true, limit: opts?.limit })
+          break
+        case 'new':
+          baseQueue = selectNewQueue(index, { limit: opts?.limit })
+          break
+        case 'weak':
+          baseQueue = rankWeakCards(index, logs, { limit: opts?.limit })
+          break
+        case 'redo':
+          baseQueue = selectRecentMisses(index, logs, { now, limit: opts?.limit })
+          break
+        case 'calibration':
+          baseQueue = selectMiscalibratedCards(index, logs, { limit: opts?.limit })
+          break
+        default: {
+          const vs = get().vaultSettings
+          const newPerDay = vs.flashcardNewPerDay ?? DEFAULT_FLASHCARD_NEW_PER_DAY
+          const maxReviewsPerDay = vs.flashcardMaxReviewsPerDay ?? DEFAULT_FLASHCARD_MAX_REVIEWS_PER_DAY
+          const progress = countDailyProgress(logs, now)
+          baseQueue = selectDueQueue(index, {
+            now,
+            newPerDay,
+            maxReviewsPerDay,
+            newDoneToday: progress.newDoneToday,
+            reviewsDoneToday: progress.reviewsDoneToday
+          })
+        }
+      }
+
+      // Ordering: a prerequisite path runs foundational-first (by concept depth);
+      // due/free get the warm-up/interleave/cool-down shaping; the ranked modes
+      // (weak/redo/calibration/new) keep their deliberate order as-is.
+      let queue: string[]
+      if (depthByKey) {
+        const depths = depthByKey
+        const focusDepth = (id: string): number => {
+          const focus = index[id]?.card.concepts[0]
+          return focus ? depths.get(conceptKey(focus)) ?? Number.POSITIVE_INFINITY : Number.POSITIVE_INFINITY
+        }
+        queue = baseQueue
+          .map((id, i) => ({ id, i, d: focusDepth(id) }))
+          .sort((a, b) => a.d - b.d || a.i - b.i)
+          .map((x) => x.id)
+      } else if (mode === 'due' || mode === 'free') {
+        queue = shapeSession(baseQueue, index)
+      } else {
+        queue = baseQueue
+      }
+
+      set({
+        flashcardDeckByNote: cache,
+        studyIndex: index,
+        studyQueue: queue,
+        studyCursor: 0,
+        studyPredicted: null,
+        studySessionStartedAt: queue.length === 0 ? null : Date.now(),
+        studyPhase: queue.length === 0 ? 'summary' : 'front'
+      })
+    } catch (err) {
+      console.error('startStudySession failed', err)
+      set({
+        studyPhase: 'summary',
+        studyError: err instanceof Error ? err.message : 'Could not load cards to study.'
+      })
+    }
+  },
+
+  setStudyPredicted: (rating) => {
+    if (get().studyPhase !== 'front') return
+    set({ studyPredicted: rating })
+  },
+
+  revealCurrentCard: () => {
+    if (get().studyPhase !== 'front') return
+    set({ studyPhase: 'revealed' })
+  },
+
+  gradeCurrentCard: async (rating, detail) => {
+    const s = get()
+    if (s.studyPhase !== 'revealed') return
+    const index = s.studyIndex
+    const cardId = s.studyQueue[s.studyCursor]
+    const entry = index?.[cardId]
+    if (!index || !entry) return
+
+    const now = new Date()
+    const { srs } = schedule(entry.card.srs, rating, now)
+    const updatedCard: Flashcard = { ...entry.card, srs }
+    const notePath = entry.sourceNotePath
+
+    const grade: ReviewGrade = {
+      cardId,
+      reviewedAt: now.toISOString(),
+      // Only record a prediction the learner actually made — a defaulted value
+      // would read as perfectly calibrated and pollute the calibration stats.
+      ...(s.studyPredicted ? { predictedRating: s.studyPredicted } : {}),
+      rating,
+      ...(detail?.learnerAnswer ? { learnerAnswer: detail.learnerAnswer } : {}),
+      ...(detail?.criteria ? { criteria: detail.criteria } : {}),
+      ...(detail?.score != null ? { score: detail.score } : {})
+    }
+
+    // Advance the session state OPTIMISTICALLY — before any awaited disk write —
+    // so the loop (card advance, phase, in-session progress) reacts instantly and
+    // the renderer's reveal/grade feedback never waits on file I/O. The persistence
+    // below continues in the background and is best-effort.
+    set((st) => {
+      // Keep the in-memory index current so later passes/counts see the new SRS.
+      const nextIndex: CardIndex = {
+        ...st.studyIndex,
+        [cardId]: { ...entry, card: updatedCard }
+      }
+      // Re-queue a card so it comes back before the session ends: always for an
+      // `again`, and in a mastery loop for anything short of good/easy.
+      const requeue =
+        rating === 'again' || (st.studyMasteryLoop && rating !== 'good' && rating !== 'easy')
+      const queue = requeue ? [...st.studyQueue, cardId] : st.studyQueue
+      const cursor = st.studyCursor + 1
+      // End on an exhausted queue, or once the time-box has elapsed (even mid-queue).
+      const timedOut =
+        st.studyTimeBoxMs != null &&
+        st.studySessionStartedAt != null &&
+        Date.now() - st.studySessionStartedAt >= st.studyTimeBoxMs
+      return {
+        studyIndex: nextIndex,
+        studyQueue: queue,
+        studyCursor: cursor,
+        studyPredicted: null,
+        studySessionGrades: [...st.studySessionGrades, grade],
+        studyPhase: cursor >= queue.length || timedOut ? 'summary' : 'front'
+      }
+    })
+
+    // Persist the new SRS state (rewrite the note's deck file), then append to the
+    // append-only review log. Both are best-effort; the in-session summary does not
+    // depend on either write succeeding.
+    try {
+      const deck =
+        get().flashcardDeckByNote[notePath] ?? (await window.zen.readFlashcards(notePath))
+      if (deck) {
+        const cards = deck.cards.map((c) => (c.id === cardId ? updatedCard : c))
+        const merged: FlashcardDeck = { ...deck, cards }
+        const saved = await window.zen.writeFlashcards(notePath, merged)
+        set((st) => ({ flashcardDeckByNote: { ...st.flashcardDeckByNote, [notePath]: saved } }))
+      }
+    } catch (err) {
+      console.error('gradeCurrentCard persist failed', err)
+    }
+
+    try {
+      await window.zen.appendReviewGrade(notePath, grade)
+    } catch (err) {
+      console.error('appendReviewGrade failed', err)
+    }
+
+    // Live-update the dashboard (streak/goal/heatmap) when it's open behind the session.
+    if (allLeaves(get().paneLayout).some((l) => l.tabs.includes(STUDY_DASHBOARD_TAB_PATH))) {
+      void get().loadStudyStats()
+    }
+  },
+
+  endStudySession: () => {
+    const state = get()
+    for (const leaf of allLeaves(state.paneLayout)) {
+      for (const tab of leaf.tabs) {
+        if (isStudyTabPath(tab)) void get().closeTabInPane(leaf.id, tab)
+      }
+    }
+    set({
+      studyScope: null,
+      studyIndex: null,
+      studyQueue: [],
+      studyCursor: 0,
+      studyPhase: 'idle',
+      studyPredicted: null,
+      studySessionGrades: [],
+      studyError: null,
+      studyMode: 'due',
+      studySessionStartedAt: null,
+      studyTimeBoxMs: null,
+      studyMasteryLoop: false
+    })
+    // Studying changes the numbers the dashboard shows; refresh it if it's open.
+    if (allLeaves(get().paneLayout).some((l) => l.tabs.includes(STUDY_DASHBOARD_TAB_PATH))) {
+      void get().loadStudyStats()
+    }
+  },
+
+  openStudyDashboard: async () => {
+    await get().openNoteInPane(get().activePaneId, STUDY_DASHBOARD_TAB_PATH)
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    set({ focusedPanel: 'editor' })
+    await get().loadStudyStats()
+  },
+
+  loadStudyStats: async () => {
+    set({ studyStatsLoading: true, studyStatsError: null })
+    try {
+      // Read every deck (cards → concepts/SRS) and review log (grades → streak,
+      // heatmap, accuracy) — the same cross-deck read `startStudySession` uses.
+      const decks: FlashcardDeck[] = []
+      const cache = { ...get().flashcardDeckByNote }
+      const summaries = await window.zen.listFlashcardDecks()
+      for (const s of summaries) {
+        const deck = await window.zen.readFlashcards(s.sourceNotePath)
+        if (deck) {
+          decks.push(deck)
+          cache[s.sourceNotePath] = deck
+        }
+      }
+      const logs: ReviewLogFile[] = []
+      for (const s of summaries) {
+        try {
+          const log = await window.zen.readReviewLog(s.sourceNotePath)
+          if (log) logs.push(log)
+        } catch {
+          // a missing/corrupt log just means no recorded history for that note
+        }
+      }
+      const gamification = get().studyGamification ?? (await window.zen.readStudyGamification())
+      const stats = computeStudyStats(decks, logs, gamification, new Date())
+      // Staleness: compare each deck against its note's last edit (notes list
+      // metadata the store already holds).
+      const updatedAtByPath = new Map(get().notes.map((n) => [n.path, n.updatedAt]))
+      const staleDecks = findStaleDecks(decks, (p) => updatedAtByPath.get(p))
+      set({
+        flashcardDeckByNote: cache,
+        studyGamification: gamification,
+        studyStats: stats,
+        staleDecks,
+        studyStatsLoading: false
+      })
+    } catch (err) {
+      console.error('loadStudyStats failed', err)
+      set({
+        studyStatsLoading: false,
+        studyStatsError: err instanceof Error ? err.message : 'Could not load study stats.'
+      })
+    }
+  },
+
+  setStudyDailyGoal: async (goal) => {
+    const next = Math.max(1, Math.round(goal))
+    const base = get().studyGamification ?? DEFAULT_STUDY_GAMIFICATION
+    set({ studyGamification: { ...base, dailyGoal: next } })
+    // Recompute immediately so the ring reacts without waiting on the write.
+    if (get().studyStats) {
+      set({
+        studyStats: {
+          ...get().studyStats!,
+          dailyGoal: next,
+          goalMet: get().studyStats!.reviewsToday >= next
+        }
+      })
+    }
+    await queueStudyGamificationWrite(() => get().studyGamification)
+  },
+
+  setStudySoundEnabled: async (enabled) => {
+    const base = get().studyGamification ?? DEFAULT_STUDY_GAMIFICATION
+    set({ studyGamification: { ...base, soundEnabled: enabled } })
+    await queueStudyGamificationWrite(() => get().studyGamification)
+  },
+
+  startPomodoroTimer: async () => {
+    // Synchronously, inside the triggering click/keypress: browsers only allow
+    // the notification-permission prompt within a user gesture.
+    if ((get().studyGamification ?? DEFAULT_STUDY_GAMIFICATION).pomodoroNotificationsEnabled) {
+      requestPomodoroNotificationPermission()
+    }
+    await get().loadStudyGamification()
+    const config = get().studyGamification?.pomodoro ?? DEFAULT_POMODORO_CONFIG
+    const next = startPomodoro(Date.now(), config)
+    set({ pomodoro: next, pomodoroMinimized: false })
+    persistPomodoro(next)
+  },
+
+  tickPomodoroTimer: () => {
+    const current = get().pomodoro
+    if (!current) return false
+    const { state, transitioned } = advancePomodoro(current, Date.now())
+    if (transitioned) {
+      set({ pomodoro: state })
+      persistPomodoro(state)
+    }
+    return transitioned
+  },
+
+  togglePomodoroPause: () => {
+    const current = get().pomodoro
+    if (!current) return
+    const now = Date.now()
+    const next = current.pausedAt === null ? pausePomodoro(current, now) : resumePomodoro(current, now)
+    set({ pomodoro: next })
+    persistPomodoro(next)
+  },
+
+  skipPomodoroPhase: () => {
+    const current = get().pomodoro
+    if (!current) return
+    const next = skipPomodoroPhase(current, Date.now())
+    set({ pomodoro: next })
+    persistPomodoro(next)
+  },
+
+  stopPomodoroTimer: () => {
+    set({ pomodoro: null, pomodoroMinimized: false })
+    persistPomodoro(null)
+  },
+
+  setPomodoroMinimized: (minimized) => {
+    set({ pomodoroMinimized: minimized })
+  },
+
+  setPomodoroConfig: async (config) => {
+    const base = get().studyGamification ?? DEFAULT_STUDY_GAMIFICATION
+    set({ studyGamification: { ...base, pomodoro: normalizePomodoroConfig(config) } })
+    await queueStudyGamificationWrite(() => get().studyGamification)
+  },
+
+  setPomodoroNotificationsEnabled: async (enabled) => {
+    if (enabled) requestPomodoroNotificationPermission()
+    const base = get().studyGamification ?? DEFAULT_STUDY_GAMIFICATION
+    set({ studyGamification: { ...base, pomodoroNotificationsEnabled: enabled } })
+    await queueStudyGamificationWrite(() => get().studyGamification)
+  },
+
+  loadStudyGamification: async () => {
+    if (get().studyGamification) return
+    try {
+      set({ studyGamification: await window.zen.readStudyGamification() })
+    } catch (err) {
+      console.error('loadStudyGamification failed', err)
+    }
+  },
+
+  openConceptGraph: async () => {
+    await get().openNoteInPane(get().activePaneId, CONCEPT_GRAPH_TAB_PATH)
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    set({ focusedPanel: 'editor' })
+    await get().loadConceptGraph()
+  },
+
+  loadConceptGraph: async () => {
+    set({ conceptGraphLoading: true, conceptGraphError: null })
+    try {
+      // Same cross-deck read the dashboard uses: cards → concepts/prereqs/SRS,
+      // review logs → per-concept accuracy.
+      const decks: FlashcardDeck[] = []
+      const cache = { ...get().flashcardDeckByNote }
+      const summaries = await window.zen.listFlashcardDecks()
+      for (const s of summaries) {
+        const deck = await window.zen.readFlashcards(s.sourceNotePath)
+        if (deck) {
+          decks.push(deck)
+          cache[s.sourceNotePath] = deck
+        }
+      }
+      const logs: ReviewLogFile[] = []
+      for (const s of summaries) {
+        try {
+          const log = await window.zen.readReviewLog(s.sourceNotePath)
+          if (log) logs.push(log)
+        } catch {
+          // a missing/corrupt log just means no recorded history for that note
+        }
+      }
+      const graph = buildConceptGraph(decks, logs, new Date())
+      set({ flashcardDeckByNote: cache, conceptGraph: graph, conceptGraphLoading: false })
+    } catch (err) {
+      console.error('loadConceptGraph failed', err)
+      set({
+        conceptGraphLoading: false,
+        conceptGraphError: err instanceof Error ? err.message : 'Could not load the concept graph.'
+      })
     }
   },
 
@@ -4712,6 +5938,10 @@ export const useStore = create<Store>((set, get) => {
   },
   setWhichKeyHintTimeoutMs: (ms) => {
     set({ whichKeyHintTimeoutMs: Math.min(3000, Math.max(400, Math.round(ms))) })
+    savePrefs(collectPrefs(get()))
+  },
+  setLeaderToggle: (on) => {
+    set({ leaderToggle: on })
     savePrefs(collectPrefs(get()))
   },
   setVaultTextSearchBackend: (backend) => {
